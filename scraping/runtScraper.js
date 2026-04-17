@@ -2,8 +2,45 @@ const { connectToChrome } = require('./connectToChrome');
 const fs = require('fs');
 const path = require('path');
 
+const URL = 'https://runtpro.runt.gov.co/#/consultar-direcciones-pn';
+
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function random(min = 800, max = 2500) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function humanDelay(page, min, max) {
+  await page.waitForTimeout(random(min, max));
+}
+
+async function humanScroll(page) {
+  await page.mouse.wheel(0, random(200, 800));
+  await humanDelay(page, 400, 1200);
+}
+
+async function humanClearAndType(page, selector, value) {
+  const input = page.locator(selector);
+  await input.waitFor({ timeout: 10000 });
+
+  await input.click();
+  await humanDelay(page, 200, 600);
+
+  await page.keyboard.down('Control');
+  await page.keyboard.press('A');
+  await page.keyboard.up('Control');
+  await humanDelay(page, 100, 300);
+
+  await page.keyboard.press('Backspace');
+  await humanDelay(page, 300, 700);
+
+  await input.type(String(value), {
+    delay: random(80, 160)
+  });
+
+  await humanDelay(page, 500, 1200);
 }
 
 async function openTipoDocumentoSelect(page) {
@@ -13,17 +50,17 @@ async function openTipoDocumentoSelect(page) {
 
 async function selectTipoDocumento(page, tipoDocumento) {
   await openTipoDocumentoSelect(page);
-  await page.locator('mat-option .mat-option-text', { hasText: tipoDocumento }).click();
-}
+  await humanDelay(page, 400, 1200);
 
-async function fillDocumento(page, numeroDocumento) {
-  const input = page.locator('input[formcontrolname="nroDocumento"]');
-  await input.waitFor({ timeout: 10000 });
-  await input.fill('');
-  await input.fill(String(numeroDocumento));
+  await page.locator('mat-option .mat-option-text', {
+    hasText: tipoDocumento
+  }).click();
+
+  await humanDelay(page, 800, 1800);
 }
 
 async function clickBuscar(page) {
+  await humanScroll(page);
   await page.locator('button[type="submit"]', { hasText: 'Buscar' }).click();
 }
 
@@ -39,20 +76,24 @@ exports.scrapeDireccionesPN = async ({ tipoDocumento, numeroDocumento }) => {
 
   console.log('Sesión Runt detectada');
 
-  await page.goto('https://runtpro.runt.gov.co/#/consultar-direcciones-pn', {
-    waitUntil: 'domcontentloaded'
-  });
-
-  await page.waitForTimeout(1500);
+  await page.goto(URL, { waitUntil: 'domcontentloaded' });
+  await humanDelay(page, 1500, 3000);
 
   await selectTipoDocumento(page, tipoDocumento);
-  await fillDocumento(page, numeroDocumento);
+
+  await humanClearAndType(page, 'input[formcontrolname="nroDocumento"]', numeroDocumento);
+
   await clickBuscar(page);
 
-  await page.waitForTimeout(4000);
+  await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+  await humanDelay(page, 2000, 4000);
 
   const screenshotsDir = path.join(__dirname, '../screenshots');
-  const screenshotPath = await takeScreenshot(page, screenshotsDir, `runt-${numeroDocumento}.png`);
+  const screenshotPath = await takeScreenshot(
+    page,
+    screenshotsDir,
+    `runt-${numeroDocumento}.png`
+  );
 
   return {
     ok: true,
@@ -64,36 +105,44 @@ exports.scrapeDireccionesPN = async ({ tipoDocumento, numeroDocumento }) => {
 exports.scrapeDireccionesPNBatch = async ({ tipoDocumento, documentos }) => {
   const { page } = await connectToChrome();
 
-  console.log('Sesión Runt detectada (BATCH)');
-
-  await page.goto('https://runtpro.runt.gov.co/#/consultar-direcciones-pn', {
-    waitUntil: 'domcontentloaded'
-  });
-
-  await page.waitForTimeout(1500);
-
-  await selectTipoDocumento(page, tipoDocumento);
+  console.log('Sesión Runt detectada (BATCH HUMANO)');
 
   const screenshotsDir = path.join(__dirname, '../screenshots');
   ensureDir(screenshotsDir);
 
   const results = [];
 
-  for (const numeroDocumento of documentos) {
-    const doc = String(numeroDocumento).trim();
+  for (let i = 0; i < documentos.length; i++) {
+    const doc = String(documentos[i]).trim();
 
     if (!doc) {
-      results.push({ documento: numeroDocumento, ok: false, error: 'Documento vacío' });
+      results.push({
+        documento: documentos[i],
+        ok: false,
+        error: 'Documento vacío'
+      });
       continue;
     }
 
     try {
-      await fillDocumento(page, doc);
+      if (i % 2 === 0) {
+        await page.goto(URL, { waitUntil: 'domcontentloaded' });
+        await humanDelay(page, 1500, 3000);
+        await selectTipoDocumento(page, tipoDocumento);
+      }
+
+      await humanClearAndType(page, 'input[formcontrolname="nroDocumento"]', doc);
+
       await clickBuscar(page);
 
-      await page.waitForTimeout(3000);
+      await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+      await humanDelay(page, 2500, 5000);
 
-      const screenshotPath = await takeScreenshot(page, screenshotsDir, `runt-${doc}.png`);
+      const screenshotPath = await takeScreenshot(
+        page,
+        screenshotsDir,
+        `runt-${doc}.png`
+      );
 
       results.push({
         documento: doc,
@@ -102,9 +151,14 @@ exports.scrapeDireccionesPNBatch = async ({ tipoDocumento, documentos }) => {
         screenshotPath
       });
 
-      await page.waitForTimeout(800);
+      await humanDelay(page, 3000, 7000);
+
     } catch (err) {
-      const screenshotPath = await takeScreenshot(page, screenshotsDir, `runt-${doc}-error.png`);
+      const screenshotPath = await takeScreenshot(
+        page,
+        screenshotsDir,
+        `runt-${doc}-error.png`
+      );
 
       results.push({
         documento: doc,
@@ -113,7 +167,7 @@ exports.scrapeDireccionesPNBatch = async ({ tipoDocumento, documentos }) => {
         screenshotPath
       });
 
-      await page.waitForTimeout(1000);
+      await humanDelay(page, 4000, 8000);
     }
   }
 

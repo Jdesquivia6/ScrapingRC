@@ -1,13 +1,20 @@
 const { chromium } = require('playwright');
 
 async function connectToChrome() {
-  const browser = await chromium.connectOverCDP(
-    'http://localhost:9222'
-  );
+  const browser = await chromium.connectOverCDP('http://localhost:9222');
 
-  const context = browser.contexts()[0];
+  let context = browser.contexts()[0];
+  if (!context) {
+    context = await browser.newContext();
+  }
 
-  let page = context.pages()[0];
+  const pages = context.pages();
+
+  let page =
+    pages.find(p =>
+      p.url().includes('runtpro.runt.gov.co')
+    ) || pages[0];
+
   if (!page) {
     page = await context.newPage();
   }

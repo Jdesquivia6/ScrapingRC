@@ -45,7 +45,7 @@ exports.consultarDireccionesPNBatch = async (req, res) => {
     }
 
 
-    const docsLimited = docsSanitized.slice(0, 10);
+    const docsLimited = docsSanitized.slice(0, 1000);
 
     const results = await scrapeDireccionesPNBatch({
       tipoDocumento,
