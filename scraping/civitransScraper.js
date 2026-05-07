@@ -18,7 +18,7 @@ exports.scrapeComparendos = async (numeroComparendo) => {
 
         if (json?.code === 'unauthorized') {
           throw new Error(
-            'Sesión Civitrans expirada. Requiere login humano.'
+            'Sesión expirada. Requiere login humano.'
           );
         }
 
