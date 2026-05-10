@@ -12,7 +12,7 @@ const transporter = nodemailer.createTransport({
 
 async function enviarCorreo({ to, subject, html }) {
   return transporter.sendMail({
-    from: `"APP RUNT" <${process.env.SMTP_USER}>`,
+    from: `"AutoCore" <${process.env.SMTP_USER}>`,
     to,
     subject,
     html
