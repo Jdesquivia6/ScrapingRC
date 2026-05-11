@@ -19,7 +19,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/api/civitrans', civitransRoutes);
+app.use('/api/personas/direcciones', civitransRoutes);
 app.use('/api/liquidacion', liquidacionRoutes);
 app.use('/api/placas', placasRoutes);
 app.use('/api/vehiculos', vehiculoRoutes);
