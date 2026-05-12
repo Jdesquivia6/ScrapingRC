@@ -13,6 +13,9 @@ const runtSessionRoutes = require('./routes/runtSession.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const authRoutes = require('./routes/auth.routes');
 const usersRoutes = require('./routes/users.routes');
+const {
+  exportarDashboardExcel
+} = require('./controllers/dashboard.controller');
 
 const app = express();
 
@@ -27,6 +30,7 @@ app.use('/api/datos-vehiculo', datosVehiculoRoutes);
 app.use('/api/historial-vehiculos', datosVehiculoRoutes);
 app.use('/api/placas-pendientes', placasPendientesRoutes);
 app.use('/api/runt-session', runtSessionRoutes);
+app.get('/api/dashboard/exportar-excel', exportarDashboardExcel);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
