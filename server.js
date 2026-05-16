@@ -13,6 +13,7 @@ const runtSessionRoutes = require('./routes/runtSession.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const authRoutes = require('./routes/auth.routes');
 const usersRoutes = require('./routes/users.routes');
+const workerJobsRoutes = require('./routes/workerJobs.routes');
 const {
   exportarDashboardExcel
 } = require('./controllers/dashboard.controller');
@@ -34,6 +35,7 @@ app.get('/api/dashboard/exportar-excel', exportarDashboardExcel);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/worker-jobs', workerJobsRoutes);
 
 app.listen(process.env.PORT, () => {
   console.log(`API corriendo en puerto ${process.env.PORT}`);

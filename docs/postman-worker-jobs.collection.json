@@ -1,0 +1,171 @@
+{
+  "info": {
+    "name": "ScrapingRC - Worker Jobs E2E",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Coleccion para probar backend central de jobs + worker local"
+  },
+  "item": [
+    {
+      "name": "1) Auth - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": "{{baseUrl}}/auth/login",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json?.token) pm.environment.set('token', json.token);",
+              "if (json?.user?.id_usuario) pm.environment.set('userId', json.user.id_usuario);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2) RUNT Session - Iniciar",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/runt-session/iniciar"
+      }
+    },
+    {
+      "name": "3) Worker Jobs - Catalogo estados",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{baseUrl}}/worker-jobs/catalogos/estados"
+      }
+    },
+    {
+      "name": "4) Worker Jobs - Crear (consulta-placa)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{baseUrl}}/worker-jobs",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"modulo\": \"consulta-placa\",\n  \"workerName\": \"{{workerName}}\",\n  \"items\": [\n    { \"placa\": \"{{placa1}}\" },\n    { \"placa\": \"{{placa2}}\" }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json?.job?.id_job) pm.environment.set('jobId', json.job.id_job);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "5) Worker - Heartbeat",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{baseUrl}}/worker-jobs/worker/heartbeat",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"workerName\": \"{{workerName}}\",\n  \"modulosPermitidos\": [\"consulta-placa\", \"datos-vehiculo\", \"personas-direcciones\", \"liquidaciones\"],\n  \"huellaViva\": true\n}"
+        }
+      }
+    },
+    {
+      "name": "6) Worker - Tomar siguiente",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{baseUrl}}/worker-jobs/worker/tomar-siguiente",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"workerName\": \"{{workerName}}\",\n  \"modulosPermitidos\": [\"consulta-placa\", \"datos-vehiculo\", \"personas-direcciones\", \"liquidaciones\"],\n  \"sesionActiva\": true,\n  \"huellaViva\": true\n}"
+        }
+      }
+    },
+    {
+      "name": "7) Worker Jobs - Listar",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{baseUrl}}/worker-jobs?limit=50"
+      }
+    },
+    {
+      "name": "8) Worker Jobs - Progreso",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{baseUrl}}/worker-jobs/{{jobId}}/progreso"
+      }
+    },
+    {
+      "name": "9) Worker Jobs - Detalle",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{baseUrl}}/worker-jobs/{{jobId}}"
+      }
+    },
+    {
+      "name": "10) Worker Jobs - Reintentar fallidos",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{baseUrl}}/worker-jobs/{{jobId}}/reintentar-fallidos"
+      }
+    },
+    {
+      "name": "11) Worker Jobs - Cancelar",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{baseUrl}}/worker-jobs/{{jobId}}/cancelar"
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000/api" },
+    { "key": "email", "value": "admin@demo.com" },
+    { "key": "password", "value": "123456" },
+    { "key": "token", "value": "" },
+    { "key": "userId", "value": "" },
+    { "key": "jobId", "value": "" },
+    { "key": "workerName", "value": "PC-JOSE" },
+    { "key": "placa1", "value": "ABC123" },
+    { "key": "placa2", "value": "XYZ987" }
+  ]
+}
