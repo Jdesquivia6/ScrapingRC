@@ -629,7 +629,7 @@ exports.workerHeartbeat = async (req, res) => {
       huellaViva
     } = req.body;
 
-    const estadoSesion = obtenerEstadoSesionRunt();
+    const estadoSesion = await obtenerEstadoSesionRunt();
     const huellaValidada = asBoolean(huellaViva);
 
     const modulosUsuario = req.user.rol === 'administrador'

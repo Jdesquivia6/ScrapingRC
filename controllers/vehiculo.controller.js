@@ -13,7 +13,7 @@ exports.procesarPlacasBatch = async (req, res) => {
       });
     }
 
-    const session = obtenerEstadoSesionRunt();
+    const session = await obtenerEstadoSesionRunt();
 
     if (!session.puedeConsultar) {
       return res.status(409).json({
@@ -38,7 +38,7 @@ exports.procesarPlacasBatch = async (req, res) => {
     let detenidoPorSesion = false;
 
     for (const placa of placas) {
-      const sessionActual = obtenerEstadoSesionRunt();
+      const sessionActual = await obtenerEstadoSesionRunt();
 
       if (!sessionActual.puedeConsultar) {
         results.push({
@@ -100,7 +100,7 @@ exports.procesarPlacasBatch = async (req, res) => {
       procesadas: results.length,
       exitosas: results.filter(r => r.ok).length,
       fallidas: results.filter(r => !r.ok).length,
-      session: obtenerEstadoSesionRunt(),
+      session: await obtenerEstadoSesionRunt(),
       results
     });
 
