@@ -4,29 +4,33 @@ const {
   obtenerEstadoSesionRunt
 } = require('../utils/runtSession');
 
-exports.iniciarSesion = (req, res) => {
-  iniciarSesionRunt();
+exports.iniciarSesion = async (req, res) => {
+  await iniciarSesionRunt();
+  const session = await obtenerEstadoSesionRunt();
 
   return res.json({
     ok: true,
     message: 'Sesión RUNT registrada correctamente',
-    session: obtenerEstadoSesionRunt()
+    session
   });
 };
 
-exports.reiniciarSesion = (req, res) => {
-  reiniciarSesionRunt();
+exports.reiniciarSesion = async (req, res) => {
+  await reiniciarSesionRunt();
+  const session = await obtenerEstadoSesionRunt();
 
   return res.json({
     ok: true,
     message: 'Sesión RUNT reiniciada correctamente',
-    session: obtenerEstadoSesionRunt()
+    session
   });
 };
 
-exports.estadoSesion = (req, res) => {
+exports.estadoSesion = async (req, res) => {
+  const session = await obtenerEstadoSesionRunt();
+
   return res.json({
     ok: true,
-    session: obtenerEstadoSesionRunt()
+    session
   });
 };
