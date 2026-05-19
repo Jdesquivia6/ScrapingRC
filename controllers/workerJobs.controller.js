@@ -951,7 +951,7 @@ exports.guardarResultadoScraping = async (req, res) => {
   
   try {
     const { id } = req.params;
-    const { idItem, modulo, resultado } = req.body;
+    const { idItem, modulo, resultado, fk_usuario } = req.body;
 
     if (!idItem || !modulo || !resultado) {
       return res.status(400).json({
@@ -960,98 +960,166 @@ exports.guardarResultadoScraping = async (req, res) => {
       });
     }
 
+    const usuarioId = fk_usuario || req.user?.id_usuario;
+
     await client.query('BEGIN');
 
-    // Guardar según el tipo de módulo
+    // ================================================
+    // CONSULTA-PLACA: Guardar en 3 tablas
+    // ================================================
     if (modulo === 'consulta-placa') {
       const placa = resultado.placa || '';
-      const estadoConsulta = resultado.ok ? true : false;
-      const errorConsulta = resultado.error || null;
-
+      
+      // 1. Insertar/actualizar consultas_placas
       await client.query(`
         INSERT INTO consultas_placas 
           (placa, estado_consulta, error_consulta, fecha_consulta, fk_usuario)
-        VALUES ($1, $2, $3, NOW(), 
-          (SELECT fk_usuario FROM worker_jobs WHERE id_job = $4))
+        VALUES ($1, $2, $3, NOW(), $4)
         ON CONFLICT (placa) DO UPDATE SET
           estado_consulta = EXCLUDED.estado_consulta,
           error_consulta = EXCLUDED.error_consulta,
-          fecha_consulta = NOW()
-      `, [placa, estadoConsulta, errorConsulta, id]);
+          fecha_consulta = NOW(),
+          fk_usuario = COALESCE(consultas_placas.fk_usuario, EXCLUDED.fk_usuario)
+        RETURNING id_consul_placa
+      `, [placa, resultado.ok ? true : false, resultado.error || null, usuarioId]);
 
-    } else if (modulo === 'datos-vehiculo') {
+      // Obtener el id de la placa consultada
+      const placaResult = await client.query(
+        'SELECT id_consul_placa FROM consultas_placas WHERE placa = $1',
+        [placa]
+      );
+      const id_consul_placa = placaResult.rows[0]?.id_consul_placa;
+
+      if (id_consul_placa && resultado.ok) {
+        // 2. Insertar SOAT/Técnico/Propietario
+        await client.query(`
+          INSERT INTO runt_soat_tecno_propietario (
+            tipo_identificacion_propietario,
+            numero_identificacion_propietario,
+            nombre_razon_social_propietario,
+            fecha_expedicion_tecno,
+            fecha_vigencia_tecno,
+            fecha_inicio_vigencia_soat,
+            fecha_vencimiento_vigencia_soat,
+            fk_consul_placa,
+            data
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `, [
+          resultado.tipo_identificacion_propietario || null,
+          resultado.numero_identificacion_propietario || null,
+          resultado.nombre_razon_social_propietario || null,
+          resultado.fecha_expedicion_tecno || null,
+          resultado.fecha_vigencia_tecno || null,
+          resultado.fecha_inicio_vigencia_soat || null,
+          resultado.fecha_vencimiento_vigencia_soat || null,
+          id_consul_placa,
+          JSON.stringify(resultado)
+        ]);
+
+        // 3. Insertar persona natural propietario
+        const nombres = (resultado.nombre_razon_social_propietario || '').split(' ').slice(0, -1).join(' ');
+        const apellidos = (resultado.nombre_razon_social_propietario || '').split(' ').slice(-1).join(' ');
+
+        await client.query(`
+          INSERT INTO persona_natural_propietario (
+            tipo_documento,
+            numero_documento,
+            nombres,
+            apellidos,
+            estado_runt_persona,
+            fk_consul_placa,
+            direccion_consultada
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+        `, [
+          resultado.tipo_identificacion_propietario || 'Cédula Ciudadanía',
+          resultado.numero_identificacion_propietario || null,
+          nombres,
+          apellidos || null,
+          true,
+          id_consul_placa,
+          false
+        ]);
+      }
+    }
+
+    // ================================================
+    // DATOS-VEHICULO: Guardar en runt_datos_vehiculos
+    // ================================================
+    else if (modulo === 'datos-vehiculo') {
       const placa = resultado.placa || '';
+      
+      // Obtener id de la placa
+      const placaResult = await client.query(
+        'SELECT id_consul_placa FROM consultas_placas WHERE placa = $1',
+        [placa]
+      );
+      const id_consul_placa = placaResult.rows[0]?.id_consul_placa;
 
-      await client.query(`
-        INSERT INTO runt_datos_vehiculos
-          (placa, clase, marca, linea, servicio, color, modelo, 
-           estado_consulta, error_consulta, fecha_consulta, fk_usuario)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(),
-          (SELECT fk_usuario FROM worker_jobs WHERE id_job = $10))
-        ON CONFLICT (placa) DO UPDATE SET
-          clase = EXCLUDED.clase,
-          marca = EXCLUDED.marca,
-          linea = EXCLUDED.linea,
-          servicio = EXCLUDED.servicio,
-          color = EXCLUDED.color,
-          modelo = EXCLUDED.modelo,
-          estado_consulta = EXCLUDED.estado_consulta,
-          error_consulta = EXCLUDED.error_consulta,
-          fecha_consulta = NOW()
-      `, [
-        placa,
-        resultado.clase || null,
-        resultado.marca || null,
-        resultado.linea || null,
-        resultado.servicio || null,
-        resultado.color || null,
-        resultado.modelo || null,
-        resultado.ok ? true : false,
-        resultado.error || null,
-        id
-      ]);
+      if (id_consul_placa && resultado.ok) {
+        await client.query(`
+          INSERT INTO runt_datos_vehiculos (
+            clase, marca, linea, servicio, color, modelo,
+            fk_consul_placa, data, estado_consulta, error_consulta
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        `, [
+          resultado.clase || null,
+          resultado.marca || null,
+          resultado.linea || null,
+          resultado.servicio || null,
+          resultado.color || null,
+          resultado.modelo || null,
+          id_consul_placa,
+          JSON.stringify(resultado),
+          true,
+          null
+        ]);
+      }
+    }
 
-    } else if (modulo === 'personas-direcciones') {
+    // ================================================
+    // PERSONAS-DIRECCIONES: Guardar en direcciones + persona_natural
+    // ================================================
+    else if (modulo === 'personas-direcciones') {
       const tipoDoc = resultado.tipoDocumento || '';
       const numDoc = resultado.numeroDocumento || '';
+      
+      if (resultado.ok && resultado.direcciones?.length > 0) {
+        // Insertar cada dirección
+        for (const dir of resultado.direcciones) {
+          await client.query(`
+            INSERT INTO direcciones (
+              direccion, municio_departamento, telefono, tipo_direccion, estado_direccion
+            ) VALUES ($1,$2,$3,$4,$5)
+            ON CONFLICT DO NOTHING
+          `, [
+            dir.direccion || null,
+            dir.municipioDepartamento || dir.municio_departamento || null,
+            dir.telefono || null,
+            dir.tipoDireccion || dir.tipo_direccion || null,
+            true
+          ]);
+        }
 
-      await client.query(`
-        INSERT INTO direcciones
-          (tipo_identificacion, numero_identificacion, direcciones, fk_usuario)
-        VALUES ($1, $2, $3,
-          (SELECT fk_usuario FROM worker_jobs WHERE id_job = $4))
-        ON CONFLICT (tipo_identificacion, numero_identificacion) DO UPDATE SET
-          direcciones = EXCLUDED.direcciones
-      `, [tipoDoc, numDoc, JSON.stringify(resultado.direcciones || []), id]);
-
-    } else if (modulo === 'liquidaciones' || modulo === 'liquidacion') {
-      await client.query(`
-        INSERT INTO runt_liquidaciones
-          (placa, tipo_servicio, total, detalles, fk_usuario)
-        VALUES ($1, $2, $3, $4,
-          (SELECT fk_usuario FROM worker_jobs WHERE id_job = $5))
-        ON CONFLICT (placa) DO UPDATE SET
-          tipo_servicio = EXCLUDED.tipo_servicio,
-          total = EXCLUDED.total,
-          detalles = EXCLUDED.detalles
-      `, [
-        resultado.placa || '',
-        resultado.tipo_servicio || '',
-        resultado.total || 0,
-        JSON.stringify(resultado.detalles || {}),
-        id
-      ]);
+        // Actualizar persona_natural_propietario
+        await client.query(`
+          UPDATE persona_natural_propietario
+          SET direccion_consultada = TRUE,
+              direccion_encontrada = TRUE,
+              fecha_consulta_direccion = NOW()
+          WHERE numero_documento = $1
+        `, [numDoc]);
+      }
     }
 
     await client.query('COMMIT');
-
+    
     return res.json({
       ok: true,
-      message: `Resultado guardado en ${modulo}`
+      message: `Resultado guardado correctamente en ${modulo}`
     });
 
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     return res.status(500).json({
       ok: false,
       error: error.message
