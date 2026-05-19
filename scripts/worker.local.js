@@ -181,6 +181,20 @@ async function setItemEstado(jobId, itemId, estado, resultado = null, error = nu
   });
 }
 
+// Guardar resultado en DB del servidor
+async function guardarResultadoScraping(jobId, itemId, modulo, resultado) {
+  try {
+    await api.post(`/worker-jobs/${jobId}/worker/guardar-resultado`, {
+      idItem: itemId,
+      modulo,
+      resultado
+    });
+    console.log(`[worker] Resultado guardado en DB para ${modulo}`);
+  } catch (error) {
+    console.error(`[worker] Error guardando resultado: ${error.message}`);
+  }
+}
+
 async function resolverItem(modulo, payload) {
   if (modulo === 'consulta-placa') {
     const placa = String(payload.placa || '').trim().toUpperCase();
@@ -233,7 +247,7 @@ async function resolverItem(modulo, payload) {
 
     try {
       console.log(`[worker] Consultando datos vehiculo ${placa} con huellero local...`);
-      const result = await scrapeDatosVehiculo(placa);
+      const result = await scrapeDatosVehiculo({ placa });
 
       if (result.sessionExpired || result.error?.includes('sesion')) {
         return {
@@ -357,8 +371,11 @@ async function procesarJob(job, items) {
 
       if (resultado.estado === 'exitoso') {
         await setItemEstado(job.id_job, item.id_item, 'exitoso', resultado.resultado, null);
+        // Guardar en DB del servidor
+        await guardarResultadoScraping(job.id_job, item.id_item, job.modulo, resultado.resultado);
       } else if (resultado.estado === 'sin_informacion') {
         await setItemEstado(job.id_job, item.id_item, 'sin_informacion', resultado.resultado || null, null);
+        await guardarResultadoScraping(job.id_job, item.id_item, job.modulo, resultado.resultado || {});
       } else if (resultado.estado === 'sesion_vencida') {
         await setItemEstado(job.id_job, item.id_item, 'sesion_vencida', resultado.resultado || null, resultado.error || 'Sesion vencida');
         try { await setJobEstado(job.id_job, 'sesion_vencida', resultado.error || 'Sesion vencida durante procesamiento'); } catch (_) {}

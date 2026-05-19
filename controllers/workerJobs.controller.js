@@ -944,3 +944,119 @@ exports.obtenerProgresoJob = async (req, res) => {
     });
   }
 };
+
+// Guardar resultado de scraping desde worker local
+exports.guardarResultadoScraping = async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { id } = req.params;
+    const { idItem, modulo, resultado } = req.body;
+
+    if (!idItem || !modulo || !resultado) {
+      return res.status(400).json({
+        ok: false,
+        error: 'idItem, modulo y resultado son obligatorios'
+      });
+    }
+
+    await client.query('BEGIN');
+
+    // Guardar según el tipo de módulo
+    if (modulo === 'consulta-placa') {
+      const placa = resultado.placa || '';
+      const estadoConsulta = resultado.ok ? true : false;
+      const errorConsulta = resultado.error || null;
+
+      await client.query(`
+        INSERT INTO consultas_placas 
+          (placa, estado_consulta, error_consulta, fecha_consulta, fk_usuario)
+        VALUES ($1, $2, $3, NOW(), 
+          (SELECT fk_usuario FROM worker_jobs WHERE id_job = $4))
+        ON CONFLICT (placa) DO UPDATE SET
+          estado_consulta = EXCLUDED.estado_consulta,
+          error_consulta = EXCLUDED.error_consulta,
+          fecha_consulta = NOW()
+      `, [placa, estadoConsulta, errorConsulta, id]);
+
+    } else if (modulo === 'datos-vehiculo') {
+      const placa = resultado.placa || '';
+
+      await client.query(`
+        INSERT INTO runt_datos_vehiculo
+          (placa, clase, marca, linea, servicio, color, modelo, 
+           estado_consulta, error_consulta, fecha_consulta, fk_usuario)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(),
+          (SELECT fk_usuario FROM worker_jobs WHERE id_job = $10))
+        ON CONFLICT (placa) DO UPDATE SET
+          clase = EXCLUDED.clase,
+          marca = EXCLUDED.marca,
+          linea = EXCLUDED.linea,
+          servicio = EXCLUDED.servicio,
+          color = EXCLUDED.color,
+          modelo = EXCLUDED.modelo,
+          estado_consulta = EXCLUDED.estado_consulta,
+          error_consulta = EXCLUDED.error_consulta,
+          fecha_consulta = NOW()
+      `, [
+        placa,
+        resultado.clase || null,
+        resultado.marca || null,
+        resultado.linea || null,
+        resultado.servicio || null,
+        resultado.color || null,
+        resultado.modelo || null,
+        resultado.ok ? true : false,
+        resultado.error || null,
+        id
+      ]);
+
+    } else if (modulo === 'personas-direcciones') {
+      const tipoDoc = resultado.tipoDocumento || '';
+      const numDoc = resultado.numeroDocumento || '';
+
+      await client.query(`
+        INSERT INTO runt_direcciones
+          (tipo_identificacion, numero_identificacion, direcciones, fk_usuario)
+        VALUES ($1, $2, $3,
+          (SELECT fk_usuario FROM worker_jobs WHERE id_job = $4))
+        ON CONFLICT (tipo_identificacion, numero_identificacion) DO UPDATE SET
+          direcciones = EXCLUDED.direcciones
+      `, [tipoDoc, numDoc, JSON.stringify(resultado.direcciones || []), id]);
+
+    } else if (modulo === 'liquidaciones' || modulo === 'liquidacion') {
+      await client.query(`
+        INSERT INTO runt_liquidaciones
+          (placa, tipo_servicio, total, detalles, fk_usuario)
+        VALUES ($1, $2, $3, $4,
+          (SELECT fk_usuario FROM worker_jobs WHERE id_job = $5))
+        ON CONFLICT (placa) DO UPDATE SET
+          tipo_servicio = EXCLUDED.tipo_servicio,
+          total = EXCLUDED.total,
+          detalles = EXCLUDED.detalles
+      `, [
+        resultado.placa || '',
+        resultado.tipo_servicio || '',
+        resultado.total || 0,
+        JSON.stringify(resultado.detalles || {}),
+        id
+      ]);
+    }
+
+    await client.query('COMMIT');
+
+    return res.json({
+      ok: true,
+      message: `Resultado guardado en ${modulo}`
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+};

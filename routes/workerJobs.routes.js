@@ -14,7 +14,8 @@ const {
   catalogoEstados,
   actualizarEstadoItem,
   actualizarEstadoJobWorker,
-  workerHeartbeat
+  workerHeartbeat,
+  guardarResultadoScraping
 } = require('../controllers/workerJobs.controller');
 
 router.get('/catalogos/estados', verifyToken, catalogoEstados);
@@ -31,5 +32,6 @@ router.post('/worker/tomar-siguiente', verifyToken, tomarSiguienteJob);
 router.post('/worker/heartbeat', verifyToken, workerHeartbeat);
 router.post('/:id/worker/item-estado', verifyToken, actualizarEstadoItem);
 router.post('/:id/worker/estado', verifyToken, actualizarEstadoJobWorker);
+router.post('/:id/worker/guardar-resultado', verifyToken, guardarResultadoScraping);
 
 module.exports = router;
