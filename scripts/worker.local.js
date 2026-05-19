@@ -1,6 +1,12 @@
 require('dotenv').config();
 const axios = require('axios');
 
+// Scrapers locales (el worker tiene el huellero USB conectado)
+const { scrapeVehiculo } = require('../scraping/vehiculoScraper');
+const { scrapeDatosVehiculo } = require('../scraping/datosVehiculoScraper');
+const { scrapeDireccionesPN } = require('../scraping/runtScraper');
+const { scrapeLiquidacionTramite } = require('../scraping/liquidacionScraper');
+
 const API_BASE = process.env.WORKER_API_BASE || 'http://localhost:3000/api';
 const TOKEN = process.env.WORKER_TOKEN || '';
 const WORKER_EMAIL = process.env.WORKER_EMAIL || '';
@@ -185,38 +191,35 @@ async function resolverItem(modulo, payload) {
       };
     }
 
-    const response = await api.post('/vehiculos/procesar-batch', {
-      placas: [placa]
-    });
+    try {
+      console.log(`[worker] Consultando placa ${placa} con huellero local...`);
+      const result = await scrapeVehiculo({ placa });
 
-    const row = response.data?.results?.[0];
+      if (result.sessionExpired || result.error?.includes('sesion')) {
+        return {
+          estado: 'sesion_vencida',
+          error: result.error || 'Sesion vencida durante consulta-placa'
+        };
+      }
 
-    if (!row) {
+      if (!result.ok) {
+        return {
+          estado: 'fallido',
+          error: result.error || 'Fallo consulta-placa',
+          resultado: result
+        };
+      }
+
+      return {
+        estado: 'exitoso',
+        resultado: result
+      };
+    } catch (error) {
       return {
         estado: 'fallido',
-        error: 'No se recibio resultado para consulta-placa'
+        error: `Error scraping local: ${error.message}`
       };
     }
-
-    if (row.sessionExpired) {
-      return {
-        estado: 'sesion_vencida',
-        error: row.error || 'Sesion vencida durante consulta-placa'
-      };
-    }
-
-    if (!row.ok) {
-      return {
-        estado: 'fallido',
-        error: row.error || 'Fallo consulta-placa',
-        resultado: row
-      };
-    }
-
-    return {
-      estado: 'exitoso',
-      resultado: row
-    };
   }
 
   if (modulo === 'datos-vehiculo') {
@@ -228,38 +231,35 @@ async function resolverItem(modulo, payload) {
       };
     }
 
-    const response = await api.post('/datos-vehiculo/procesar-batch', {
-      placas: [placa]
-    });
+    try {
+      console.log(`[worker] Consultando datos vehiculo ${placa} con huellero local...`);
+      const result = await scrapeDatosVehiculo(placa);
 
-    const row = response.data?.results?.[0];
+      if (result.sessionExpired || result.error?.includes('sesion')) {
+        return {
+          estado: 'sesion_vencida',
+          error: result.error || 'Sesion vencida durante datos-vehiculo'
+        };
+      }
 
-    if (!row) {
+      if (!result.ok) {
+        return {
+          estado: 'fallido',
+          error: result.error || 'Fallo datos-vehiculo',
+          resultado: result
+        };
+      }
+
+      return {
+        estado: 'exitoso',
+        resultado: result
+      };
+    } catch (error) {
       return {
         estado: 'fallido',
-        error: 'No se recibio resultado para datos-vehiculo'
+        error: `Error scraping local: ${error.message}`
       };
     }
-
-    if (row.sessionExpired) {
-      return {
-        estado: 'sesion_vencida',
-        error: row.error || 'Sesion vencida durante datos-vehiculo'
-      };
-    }
-
-    if (!row.ok) {
-      return {
-        estado: 'fallido',
-        error: row.error || 'Fallo datos-vehiculo',
-        resultado: row
-      };
-    }
-
-    return {
-      estado: 'exitoso',
-      resultado: row
-    };
   }
 
   if (modulo === 'personas-direcciones') {
@@ -273,57 +273,67 @@ async function resolverItem(modulo, payload) {
       };
     }
 
-    const response = await api.post('/personas/direcciones/consultar-direcciones-pn', {
-      tipoDocumento,
-      numeroDocumento
-    });
+    try {
+      console.log(`[worker] Consultando direcciones ${tipoDocumento} ${numeroDocumento}...`);
+      const result = await scrapeRunt(tipoDocumento, numeroDocumento);
 
-    const data = response.data?.data || response.data;
+      if (result.sessionExpired || result.error?.includes('sesion')) {
+        return {
+          estado: 'sesion_vencida',
+          error: result.error || 'Sesion vencida durante personas-direcciones'
+        };
+      }
 
-    if (data?.sessionExpired) {
+      if (result.noData) {
+        return {
+          estado: 'sin_informacion',
+          resultado: result
+        };
+      }
+
+      if (!result.ok) {
+        return {
+          estado: 'fallido',
+          error: result.error || 'Fallo personas-direcciones',
+          resultado: result
+        };
+      }
+
       return {
-        estado: 'sesion_vencida',
-        error: data.error || 'Sesion vencida durante personas-direcciones'
+        estado: 'exitoso',
+        resultado: result
       };
-    }
-
-    if (data?.noData) {
-      return {
-        estado: 'sin_informacion',
-        resultado: data
-      };
-    }
-
-    if (!response.data?.ok && !data?.ok) {
+    } catch (error) {
       return {
         estado: 'fallido',
-        error: data?.error || response.data?.error || 'Fallo personas-direcciones',
-        resultado: data
+        error: `Error scraping local: ${error.message}`
       };
     }
-
-    return {
-      estado: 'exitoso',
-      resultado: data
-    };
   }
 
   if (modulo === 'liquidaciones' || modulo === 'liquidacion') {
-    const response = await api.post('/liquidacion/consultar-liquidacion', payload);
-    const data = response.data?.data || response.data;
+    try {
+      console.log(`[worker] Consultando liquidacion...`);
+      const result = await scrapeLiquidacion(payload);
 
-    if (!response.data?.ok) {
+      if (!result.ok) {
+        return {
+          estado: 'fallido',
+          error: result.error || 'Fallo liquidaciones',
+          resultado: result
+        };
+      }
+
+      return {
+        estado: 'exitoso',
+        resultado: result
+      };
+    } catch (error) {
       return {
         estado: 'fallido',
-        error: response.data?.error || 'Fallo liquidaciones',
-        resultado: data
+        error: `Error scraping local: ${error.message}`
       };
     }
-
-    return {
-      estado: 'exitoso',
-      resultado: data
-    };
   }
 
   return {
