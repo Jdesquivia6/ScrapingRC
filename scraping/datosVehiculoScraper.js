@@ -258,6 +258,8 @@ async function clickBuscar(page) {
 }
 
 async function esperarRespuestaDatosVehiculo(page) {
+  // No parsear el JSON aquí - el body solo puede leerse una vez
+  // Validamos solo con headers y URL, el parsing se hace después
   const response = await page.waitForResponse(async resp => {
     try {
       if (resp.status() !== 200) return false;
@@ -275,15 +277,7 @@ async function esperarRespuestaDatosVehiculo(page) {
 
       const contentType = resp.headers()['content-type'] || '';
 
-      if (!contentType.includes('application/json')) return false;
-
-      const json = await resp.json().catch(() => null);
-
-      return Boolean(
-        json &&
-        json.datos &&
-        json.datos.placaNumeroUnicoIdentificacion
-      );
+      return contentType.includes('application/json');
 
     } catch (error) {
       return false;
@@ -291,6 +285,7 @@ async function esperarRespuestaDatosVehiculo(page) {
 
   }, { timeout: 45000 });
 
+  // Aquí sí parseamos el JSON (solo se hace una vez)
   return response;
 }
 
@@ -446,10 +441,8 @@ exports.scrapeDatosVehiculo = async ({
         return respuestaSesionVencida(placaNormalizada);
       }
 
-      await guardarErrorDatosVehiculo({
-        id_consul_placa,
-        errorMessage: textoAlerta
-      });
+      // El worker ahora maneja el guardado de errores en DB
+      // await guardarErrorDatosVehiculo({...})
 
       return {
         ok: false,
@@ -459,6 +452,7 @@ exports.scrapeDatosVehiculo = async ({
     }
 
     const resultadoRespuesta = await responsePromise;
+    // waitForResponse retorna el response object que tiene .json()
     const data = await resultadoRespuesta.json();
 
     if (!data || !data.datos) {
@@ -543,10 +537,8 @@ exports.scrapeDatosVehiculo = async ({
 
     console.error('❌ Error datos vehículo:', error.message);
 
-    await guardarErrorDatosVehiculo({
-      id_consul_placa,
-      errorMessage: error.message
-    });
+    // El worker ahora maneja el guardado de errores en DB
+    // await guardarErrorDatosVehiculo({...})
 
     await cancelarBusquedaSiExiste(page);
 

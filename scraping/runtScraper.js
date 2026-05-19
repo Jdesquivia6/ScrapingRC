@@ -733,7 +733,8 @@ exports.scrapeDireccionesPN = async ({
     }
 
     const resultadoRespuesta = await responsePromise;
-    const rawData = await resultadoRespuesta.json();
+    // El .then() en esperarRespuestaDireccionesPN ya parseó el JSON
+    const rawData = resultadoRespuesta.data;
     const items = normalizarRespuestaDirecciones(rawData);
 
     if (!items.length) {
