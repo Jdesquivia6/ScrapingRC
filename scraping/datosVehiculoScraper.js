@@ -352,28 +352,29 @@ async function aceptarAlertaSiExiste(page) {
   }
 }
 
-async function guardarErrorDatosVehiculo({
-  id_consul_placa,
-  errorMessage
-}) {
-  try {
-    await pool.query(`
-      INSERT INTO runt_datos_vehiculos (
-        fk_consul_placa,
-        estado_consulta,
-        error_consulta,
-        data
-      ) VALUES ($1,$2,$3,$4)
-    `, [
-      id_consul_placa,
-      false,
-      errorMessage,
-      {}
-    ]);
-  } catch (dbError) {
-    console.error('❌ Error guardando fallo datos vehículo:', dbError.message);
-  }
-}
+// COMMENTED: El worker ahora maneja el guardado en DB
+// async function guardarErrorDatosVehiculo({
+//   id_consul_placa,
+//   errorMessage
+// }) {
+//   try {
+//     await pool.query(`
+//       INSERT INTO runt_datos_vehiculos (
+//         fk_consul_placa,
+//         estado_consulta,
+//         error_consulta,
+//         data
+//       ) VALUES ($1,$2,$3,$4)
+//     `, [
+//       id_consul_placa,
+//       false,
+//       errorMessage,
+//       {}
+//     ]);
+//   } catch (dbError) {
+//     console.error('❌ Error guardando fallo datos vehículo:', dbError.message);
+//   }
+// }
 
 exports.scrapeDatosVehiculo = async ({
   placa,
@@ -481,35 +482,34 @@ exports.scrapeDatosVehiculo = async ({
       return respuestaSesionVencida(placaNormalizada);
     }
 
-    await client.query('BEGIN');
-
-    await client.query(`
-      INSERT INTO runt_datos_vehiculos (
-        clase,
-        marca,
-        linea,
-        servicio,
-        color,
-        modelo,
-        fk_consul_placa,
-        data,
-        estado_consulta,
-        error_consulta
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    `, [
-      limpiarTexto(datos.claseVehiculo),
-      limpiarTexto(datos.marcaVehiculo),
-      limpiarTexto(datos.lineaVehiculo),
-      limpiarTexto(datos.servicio),
-      limpiarTexto(datos.color),
-      datos.modelo || null,
-      id_consul_placa,
-      data,
-      true,
-      null
-    ]);
-
-    await client.query('COMMIT');
+    // COMMENTED: El worker ahora maneja el guardado en DB
+    // await client.query('BEGIN');
+    // await client.query(`
+    //   INSERT INTO runt_datos_vehiculos (
+    //     clase,
+    //     marca,
+    //     linea,
+    //     servicio,
+    //     color,
+    //     modelo,
+    //     fk_consul_placa,
+    //     data,
+    //     estado_consulta,
+    //     error_consulta
+    //   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    // `, [
+    //   limpiarTexto(datos.claseVehiculo),
+    //   limpiarTexto(datos.marcaVehiculo),
+    //   limpiarTexto(datos.lineaVehiculo),
+    //   limpiarTexto(datos.servicio),
+    //   limpiarTexto(datos.color),
+    //   datos.modelo || null,
+    //   id_consul_placa,
+    //   data,
+    //   true,
+    //   null
+    // ]);
+    // await client.query('COMMIT');
 
     await page
       .waitForURL('**/resultados', { timeout: 10000 })

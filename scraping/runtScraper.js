@@ -502,26 +502,28 @@ async function obtenerOInsertarDireccion(client, item) {
     return existente.rows[0].id_direcciones;
   }
 
-  const insert = await client.query(`
-    INSERT INTO direcciones (
-      direccion,
-      municio_departamento,
-      telefono,
-      tipo_direccion,
-      estado_direccion,
-      dato_migrado
-    ) VALUES ($1,$2,$3,$4,$5,$6)
-    RETURNING id_direcciones
-  `, [
-    direccion,
-    municipioDepartamento,
-    telefono,
-    tipoDireccion,
-    estadoDireccion,
-    datoMigrado
-  ]);
+  // COMMENTED: El worker ahora maneja el guardado en DB
+  // const insert = await client.query(`
+  //   INSERT INTO direcciones (
+  //     direccion,
+  //     municio_departamento,
+  //     telefono,
+  //     tipo_direccion,
+  //     estado_direccion,
+  //     dato_migrado
+  //   ) VALUES ($1,$2,$3,$4,$5,$6)
+  //   RETURNING id_direcciones
+  // `, [
+  //   direccion,
+  //   municipioDepartamento,
+  //   telefono,
+  //   tipoDireccion,
+  //   estadoDireccion,
+  //   datoMigrado
+  // ]);
 
-  return insert.rows[0].id_direcciones;
+  // return insert.rows[0].id_direcciones;
+  return null;
 }
 
 async function marcarDireccionConsultada({

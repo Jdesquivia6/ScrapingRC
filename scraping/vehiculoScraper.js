@@ -294,34 +294,34 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
       return respuestaSesionVencida(placaNormalizada);
     }
 
-    await client.query('BEGIN');
+    // COMMENTED: El worker ahora maneja el guardado en DB
+    // await client.query('BEGIN');
+    // await client.query(`
+    //   INSERT INTO runt_soat_tecno_propietario (
+    //     tipo_identificacion_propietario,
+    //     numero_identificacion_propietario,
+    //     nombre_razon_social_propietario,
+    //     fecha_expedicion_tecno,
+    //     fecha_vigencia_tecno,
+    //     fecha_inicio_vigencia_soat,
+    //     fecha_vencimiento_vigencia_soat,
+    //     fk_consul_placa,
+    //     data
+    //   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    // `, [
+    //   tipoDoc,
+    //   numeroDoc,
+    //   nombreCompleto,
+    //   tecno?.fechaExpedicion || null,
+    //   tecno?.fechaVigencia || null,
+    //   soat?.fechaInicio || null,
+    //   soat?.fechaVencimiento || null,
+    //   id_consul_placa,
+    //   data
+    // ]);
 
-    await client.query(`
-      INSERT INTO runt_soat_tecno_propietario (
-        tipo_identificacion_propietario,
-        numero_identificacion_propietario,
-        nombre_razon_social_propietario,
-        fecha_expedicion_tecno,
-        fecha_vigencia_tecno,
-        fecha_inicio_vigencia_soat,
-        fecha_vencimiento_vigencia_soat,
-        fk_consul_placa,
-        data
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-    `, [
-      tipoDoc,
-      numeroDoc,
-      nombreCompleto,
-      tecno?.fechaExpedicion || null,
-      tecno?.fechaVigencia || null,
-      soat?.fechaInicio || null,
-      soat?.fechaVencimiento || null,
-      id_consul_placa,
-      data
-    ]);
-
-    await client.query(`
-      INSERT INTO persona_natural_propietario (
+    // await client.query(`
+    //   INSERT INTO persona_natural_propietario (
         tipo_documento,
         numero_documento,
         nombres,
@@ -350,14 +350,15 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
       null
     ]);
 
-    await client.query(`
-      UPDATE consultas_placas
-      SET estado_consulta = true,
-          fecha_consulta = NOW()
-      WHERE id_consul_placa = $1
-    `, [id_consul_placa]);
+    // COMMENTED: El worker ahora maneja el guardado
+    // await client.query(`
+    //   UPDATE consultas_placas
+    //   SET estado_consulta = true,
+    //       fecha_consulta = NOW()
+    //   WHERE id_consul_placa = $1
+    // `, [id_consul_placa]);
 
-    await client.query('COMMIT');
+    // await client.query('COMMIT');
 
     // Después de guardar correctamente, cancelar para limpiar la pantalla
     await cancelarBusquedaSiExiste(page);
