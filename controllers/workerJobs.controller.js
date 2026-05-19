@@ -990,54 +990,105 @@ exports.guardarResultadoScraping = async (req, res) => {
       const id_consul_placa = placaResult.rows[0]?.id_consul_placa;
 
       if (id_consul_placa && resultado.ok) {
-        // 2. Insertar SOAT/Técnico/Propietario
-        await client.query(`
-          INSERT INTO runt_soat_tecno_propietario (
-            tipo_identificacion_propietario,
-            numero_identificacion_propietario,
-            nombre_razon_social_propietario,
-            fecha_expedicion_tecno,
-            fecha_vigencia_tecno,
-            fecha_inicio_vigencia_soat,
-            fecha_vencimiento_vigencia_soat,
-            fk_consul_placa,
-            data
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-        `, [
-          resultado.tipo_identificacion_propietario || null,
-          resultado.numero_identificacion_propietario || null,
-          resultado.nombre_razon_social_propietario || null,
-          resultado.fecha_expedicion_tecno || null,
-          resultado.fecha_vigencia_tecno || null,
-          resultado.fecha_inicio_vigencia_soat || null,
-          resultado.fecha_vencimiento_vigencia_soat || null,
-          id_consul_placa,
-          JSON.stringify(resultado.data || resultado)
-        ]);
+        // 2. Insertar/actualizar SOAT/Técnico/Propietario
+        const existingSoat = await client.query(
+          'SELECT id_soat_tecno_prop FROM runt_soat_tecno_propietario WHERE fk_consul_placa = $1',
+          [id_consul_placa]
+        );
 
-        // 3. Insertar persona natural propietario
+        if (existingSoat.rows.length > 0) {
+          // Ya existe, actualizar
+          await client.query(`
+            UPDATE runt_soat_tecno_propietario SET
+              tipo_identificacion_propietario = $1,
+              numero_identificacion_propietario = $2,
+              nombre_razon_social_propietario = $3,
+              fecha_expedicion_tecno = $4,
+              fecha_vigencia_tecno = $5,
+              fecha_inicio_vigencia_soat = $6,
+              fecha_vencimiento_vigencia_soat = $7,
+              data = $8
+            WHERE fk_consul_placa = $9
+          `, [
+            resultado.tipo_identificacion_propietario || null,
+            resultado.numero_identificacion_propietario || null,
+            resultado.nombre_razon_social_propietario || null,
+            resultado.fecha_expedicion_tecno || null,
+            resultado.fecha_vigencia_tecno || null,
+            resultado.fecha_inicio_vigencia_soat || null,
+            resultado.fecha_vencimiento_vigencia_soat || null,
+            JSON.stringify(resultado.data || resultado),
+            id_consul_placa
+          ]);
+        } else {
+          // No existe, insertar
+          await client.query(`
+            INSERT INTO runt_soat_tecno_propietario (
+              tipo_identificacion_propietario,
+              numero_identificacion_propietario,
+              nombre_razon_social_propietario,
+              fecha_expedicion_tecno,
+              fecha_vigencia_tecno,
+              fecha_inicio_vigencia_soat,
+              fecha_vencimiento_vigencia_soat,
+              fk_consul_placa,
+              data
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          `, [
+            resultado.tipo_identificacion_propietario || null,
+            resultado.numero_identificacion_propietario || null,
+            resultado.nombre_razon_social_propietario || null,
+            resultado.fecha_expedicion_tecno || null,
+            resultado.fecha_vigencia_tecno || null,
+            resultado.fecha_inicio_vigencia_soat || null,
+            resultado.fecha_vencimiento_vigencia_soat || null,
+            id_consul_placa,
+            JSON.stringify(resultado.data || resultado)
+          ]);
+        }
+
+        // 3. Insertar/actualizar persona natural propietario
         const nombres = (resultado.nombre_razon_social_propietario || '').split(' ').slice(0, -1).join(' ');
         const apellidos = (resultado.nombre_razon_social_propietario || '').split(' ').slice(-1).join(' ');
 
-        await client.query(`
-          INSERT INTO persona_natural_propietario (
-            tipo_documento,
-            numero_documento,
+        // Verificar si ya existe
+        const existingPersona = await client.query(
+          'SELECT id_per_natural_dir FROM persona_natural_propietario WHERE numero_documento = $1',
+          [resultado.numero_identificacion_propietario]
+        );
+
+        if (existingPersona.rows.length > 0) {
+          // Actualizar
+          await client.query(`
+            UPDATE persona_natural_propietario SET
+              nombres = $1,
+              apellidos = $2,
+              estado_runt_persona = $3,
+              fk_consul_placa = COALESCE(fk_consul_placa, $4)
+            WHERE numero_documento = $5
+          `, [nombres, apellidos || null, true, id_consul_placa, resultado.numero_identificacion_propietario]);
+        } else {
+          // Insertar
+          await client.query(`
+            INSERT INTO persona_natural_propietario (
+              tipo_documento,
+              numero_documento,
+              nombres,
+              apellidos,
+              estado_runt_persona,
+              fk_consul_placa,
+              direccion_consultada
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+          `, [
+            resultado.tipo_identificacion_propietario || 'Cédula Ciudadanía',
+            resultado.numero_identificacion_propietario || null,
             nombres,
-            apellidos,
-            estado_runt_persona,
-            fk_consul_placa,
-            direccion_consultada
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7)
-        `, [
-          resultado.tipo_identificacion_propietario || 'Cédula Ciudadanía',
-          resultado.numero_identificacion_propietario || null,
-          nombres,
-          apellidos || null,
-          true,
-          id_consul_placa,
-          false
-        ]);
+            apellidos || null,
+            true,
+            id_consul_placa,
+            false
+          ]);
+        }
       }
     }
 
