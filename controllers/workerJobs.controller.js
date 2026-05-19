@@ -983,7 +983,7 @@ exports.guardarResultadoScraping = async (req, res) => {
       const placa = resultado.placa || '';
 
       await client.query(`
-        INSERT INTO runt_datos_vehiculo
+        INSERT INTO runt_datos_vehiculos
           (placa, clase, marca, linea, servicio, color, modelo, 
            estado_consulta, error_consulta, fecha_consulta, fk_usuario)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(),
@@ -1016,7 +1016,7 @@ exports.guardarResultadoScraping = async (req, res) => {
       const numDoc = resultado.numeroDocumento || '';
 
       await client.query(`
-        INSERT INTO runt_direcciones
+        INSERT INTO direcciones
           (tipo_identificacion, numero_identificacion, direcciones, fk_usuario)
         VALUES ($1, $2, $3,
           (SELECT fk_usuario FROM worker_jobs WHERE id_job = $4))
