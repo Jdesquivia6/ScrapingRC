@@ -733,14 +733,7 @@ exports.scrapeDireccionesPN = async ({
     }
 
     const resultadoRespuesta = await responsePromise;
-
-    if (resultadoRespuesta.tipo !== 'data') {
-      throw new Error(
-        'No llegó respuesta JSON y tampoco apareció alerta visible'
-      );
-    }
-
-    const rawData = resultadoRespuesta.data;
+    const rawData = await resultadoRespuesta.json();
     const items = normalizarRespuestaDirecciones(rawData);
 
     if (!items.length) {

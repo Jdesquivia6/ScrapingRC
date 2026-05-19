@@ -459,14 +459,13 @@ exports.scrapeDatosVehiculo = async ({
     }
 
     const resultadoRespuesta = await responsePromise;
+    const data = await resultadoRespuesta.json();
 
-    if (resultadoRespuesta.tipo !== 'data') {
+    if (!data || !data.datos) {
       throw new Error(
-        'No llegó respuesta JSON y tampoco apareció alerta visible'
+        'No llegó respuesta JSON válida del RUNT'
       );
     }
-
-    const data = resultadoRespuesta.data;
 
     console.log('✅ JSON datos vehículo capturado');
 

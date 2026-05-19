@@ -1081,6 +1081,9 @@ exports.guardarResultadoScraping = async (req, res) => {
       const id_consul_placa = placaResult.rows[0]?.id_consul_placa;
 
       if (id_consul_placa && resultado.ok) {
+        // Los datos vienen en resultado.datos_vehiculo
+        const datosVehiculo = resultado.datos_vehiculo || {};
+        
         // Primero eliminar registros existentes para evitar duplicados
         await client.query(
           'DELETE FROM runt_datos_vehiculos WHERE fk_consul_placa = $1',
@@ -1094,12 +1097,12 @@ exports.guardarResultadoScraping = async (req, res) => {
             fk_consul_placa, data, estado_consulta, error_consulta
           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         `, [
-          resultado.clase || null,
-          resultado.marca || null,
-          resultado.linea || null,
-          resultado.servicio || null,
-          resultado.color || null,
-          resultado.modelo || null,
+          datosVehiculo.clase || null,
+          datosVehiculo.marca || null,
+          datosVehiculo.linea || null,
+          datosVehiculo.servicio || null,
+          datosVehiculo.color || null,
+          datosVehiculo.modelo || null,
           id_consul_placa,
           JSON.stringify(resultado.data || resultado),
           true,
