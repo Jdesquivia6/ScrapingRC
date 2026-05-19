@@ -1081,6 +1081,13 @@ exports.guardarResultadoScraping = async (req, res) => {
       const id_consul_placa = placaResult.rows[0]?.id_consul_placa;
 
       if (id_consul_placa && resultado.ok) {
+        // Primero eliminar registros existentes para evitar duplicados
+        await client.query(
+          'DELETE FROM runt_datos_vehiculos WHERE fk_consul_placa = $1',
+          [id_consul_placa]
+        );
+
+        // Luego insertar nuevo registro
         await client.query(`
           INSERT INTO runt_datos_vehiculos (
             clase, marca, linea, servicio, color, modelo,
