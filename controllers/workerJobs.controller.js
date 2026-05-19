@@ -973,15 +973,14 @@ exports.guardarResultadoScraping = async (req, res) => {
       // 1. Insertar/actualizar consultas_placas
       await client.query(`
         INSERT INTO consultas_placas 
-          (placa, estado_consulta, error_consulta, fecha_consulta, fk_usuario)
-        VALUES ($1, $2, $3, NOW(), $4)
+          (placa, estado_consulta, fecha_consulta, fk_usuario)
+        VALUES ($1, $2, NOW(), $3)
         ON CONFLICT (placa) DO UPDATE SET
           estado_consulta = EXCLUDED.estado_consulta,
-          error_consulta = EXCLUDED.error_consulta,
           fecha_consulta = NOW(),
           fk_usuario = COALESCE(consultas_placas.fk_usuario, EXCLUDED.fk_usuario)
         RETURNING id_consul_placa
-      `, [placa, resultado.ok ? true : false, resultado.error || null, usuarioId]);
+      `, [placa, resultado.ok ? true : false, usuarioId]);
 
       // Obtener el id de la placa consultada
       const placaResult = await client.query(
