@@ -763,7 +763,7 @@ exports.actualizarEstadoItem = async (req, res) => {
     }
 
     const resultadoParam = resultado !== undefined && resultado !== null
-      ? JSON.stringify(resultado)
+      ? JSON.stringify(resultado.data || resultado)
       : 'null';
 
     const errorParam = error !== undefined && error !== null
@@ -1012,7 +1012,7 @@ exports.guardarResultadoScraping = async (req, res) => {
           resultado.fecha_inicio_vigencia_soat || null,
           resultado.fecha_vencimiento_vigencia_soat || null,
           id_consul_placa,
-          JSON.stringify(resultado)
+          JSON.stringify(resultado.data || resultado)
         ]);
 
         // 3. Insertar persona natural propietario
@@ -1068,7 +1068,7 @@ exports.guardarResultadoScraping = async (req, res) => {
           resultado.color || null,
           resultado.modelo || null,
           id_consul_placa,
-          JSON.stringify(resultado),
+          JSON.stringify(resultado.data || resultado),
           true,
           null
         ]);

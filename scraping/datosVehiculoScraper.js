@@ -532,6 +532,9 @@ exports.scrapeDatosVehiculo = async ({
         modelo: datos.modelo
       },
 
+      // DATA COMPLETA del RUNT (para guardar en DB)
+      data: data,
+
       message: 'Datos del vehículo guardados correctamente'
     };
 

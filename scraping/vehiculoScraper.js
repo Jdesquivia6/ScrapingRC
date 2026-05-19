@@ -362,10 +362,12 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
     // Después de guardar correctamente, cancelar para limpiar la pantalla
     await cancelarBusquedaSiExiste(page);
 
+    // Armar respuesta con toda la info
     return {
       ok: true,
       placa: placaNormalizada,
 
+      // Datos parseados
       tipo_identificacion_propietario: tipoDoc,
       numero_identificacion_propietario: numeroDoc,
       nombre_razon_social_propietario: nombreCompleto,
@@ -375,6 +377,9 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
 
       fecha_inicio_vigencia_soat: soat?.fechaInicio || null,
       fecha_vencimiento_vigencia_soat: soat?.fechaVencimiento || null,
+
+      // DATA COMPLETA del RUNT (para guardar en DB)
+      data: data,
 
       message: 'Scraping y guardado exitoso'
     };
