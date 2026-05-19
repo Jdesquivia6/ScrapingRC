@@ -320,35 +320,35 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
     //   data
     // ]);
 
-    // await client.query(`
-    //   INSERT INTO persona_natural_propietario (
-        tipo_documento,
-        numero_documento,
-        nombres,
-        apellidos,
-        estado_runt_persona,
-        celular,
-        correo,
-        fk_consul_placa,
-        direccion_consultada,
-        direccion_encontrada,
-        error_consulta_direccion,
-        fecha_consulta_direccion
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-    `, [
-      tipoDoc,
-      numeroDoc,
-      nombres,
-      apellidos,
-      true,
-      celular,
-      correo,
-      id_consul_placa,
-      false,
-      null,
-      null,
-      null
-    ]);
+    // // await client.query(`
+    // //   INSERT INTO persona_natural_propietario (
+    //     tipo_documento,
+    //     numero_documento,
+    //     nombres,
+    //     apellidos,
+    //     estado_runt_persona,
+    //     celular,
+    //     correo,
+    //     fk_consul_placa,
+    //     direccion_consultada,
+    //     direccion_encontrada,
+    //     error_consulta_direccion,
+    //     fecha_consulta_direccion
+    //   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    // `, [
+    //   tipoDoc,
+    //   numeroDoc,
+    //   nombres,
+    //   apellidos,
+    //   true,
+    //   celular,
+    //   correo,
+    //   id_consul_placa,
+    //   false,
+    //   null,
+    //   null,
+    //   null
+    // ]);
 
     // COMMENTED: El worker ahora maneja el guardado
     // await client.query(`
