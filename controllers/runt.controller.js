@@ -189,3 +189,48 @@ exports.listarPersonasPendientesDirecciones = async (req, res) => {
     });
   }
 };
+
+exports.listarHistorialDirecciones = async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 100, 1000);
+
+    const result = await pool.query(`
+      SELECT DISTINCT ON (p.numero_documento)
+        p.tipo_documento,
+        p.numero_documento,
+        p.nombres,
+        p.apellidos,
+        p.celular,
+        p.correo,
+        p.direccion_consultada,
+        p.direccion_encontrada,
+        p.error_consulta_direccion,
+        p.fecha_consulta_direccion,
+        p.fecha_actualizacion,
+        cp.placa,
+        d.direccion,
+        d.municio_departamento,
+        d.telefono,
+        d.tipo_direccion
+      FROM persona_natural_propietario p
+      LEFT JOIN direcciones d
+        ON d.id_direcciones = p.fk_direcciones
+      LEFT JOIN consultas_placas cp
+        ON cp.id_consul_placa = p.fk_consul_placa
+      WHERE p.direccion_consultada = TRUE
+      ORDER BY p.numero_documento, COALESCE(p.fecha_consulta_direccion, p.fecha_actualizacion) DESC
+      LIMIT $1
+    `, [limit]);
+
+    return res.json({
+      ok: true,
+      total: result.rows.length,
+      results: result.rows
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+};
