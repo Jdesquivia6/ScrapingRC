@@ -1119,52 +1119,85 @@ exports.guardarResultadoScraping = async (req, res) => {
       
       if (resultado.ok && resultado.direcciones?.length > 0) {
         const primeraDir = resultado.direcciones[0] || {};
-        
-        // Armar nombres y apellidos desde los campos del scraper
-        const nombres = [primeraDir.primerNombre, primeraDir.segundoNombre].filter(Boolean).join(' ');
-        const apellidos = [primeraDir.primerApellido, primeraDir.segundoApellido].filter(Boolean).join(' ');
-        
-        // Intentar UPDATE primero (más seguro si no hay unique constraint)
-        const updateResult = await client.query(`
+
+        const nombres = [primeraDir.primerNombre, primeraDir.segundoNombre]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        const apellidos = [primeraDir.primerApellido, primeraDir.segundoApellido]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+
+        const direccion = primeraDir.direccion || null;
+        const municipio = primeraDir.municipio || primeraDir.municipioDepartamento || primeraDir.municio_departamento || null;
+        const telefono = primeraDir.telefono || primeraDir.celular || null;
+        const tipoDireccion = primeraDir.tipoDireccion || primeraDir.tipo_direccion || null;
+        const correo = primeraDir.correoElectronico || primeraDir.correo || null;
+
+        // 1) Buscar o crear dirección para evitar duplicados
+        let idDireccion = null;
+
+        if (direccion) {
+          const dirExistente = await client.query(`
+            SELECT id_direcciones
+            FROM direcciones
+            WHERE direccion = $1
+              AND COALESCE(municio_departamento, '') = COALESCE($2, '')
+              AND COALESCE(telefono, '') = COALESCE($3, '')
+              AND COALESCE(tipo_direccion, '') = COALESCE($4, '')
+            LIMIT 1
+          `, [direccion, municipio, telefono, tipoDireccion]);
+
+          if (dirExistente.rows.length > 0) {
+            idDireccion = dirExistente.rows[0].id_direcciones;
+          } else {
+            const insertedDir = await client.query(`
+              INSERT INTO direcciones (
+                direccion,
+                municio_departamento,
+                telefono,
+                tipo_direccion,
+                estado_direccion,
+                dato_migrado,
+                fecha_actualizacion
+              ) VALUES ($1,$2,$3,$4,$5,$6,NOW())
+              RETURNING id_direcciones
+            `, [direccion, municipio, telefono, tipoDireccion, true, primeraDir.direccionMigrada || null]);
+
+            idDireccion = insertedDir.rows[0]?.id_direcciones || null;
+          }
+        }
+
+        // 2) Actualizar persona por número de documento (no crear duplicados)
+        const updatePersona = await client.query(`
           UPDATE persona_natural_propietario
-          SET 
-            nombres = COALESCE(NULLIF($3, ''), nombres),
-            apellidos = COALESCE(NULLIF($4, ''), apellidos),
-            celular = COALESCE(NULLIF($5, ''), celular),
-            correo = COALESCE(NULLIF($6, ''), correo),
+          SET
+            tipo_documento = COALESCE(NULLIF(tipo_documento, ''), $2),
+            nombres = COALESCE(NULLIF(nombres, ''), $3),
+            apellidos = COALESCE(NULLIF(apellidos, ''), $4),
+            celular = COALESCE(NULLIF(celular, ''), $5),
+            correo = COALESCE(NULLIF(correo, ''), $6),
+            fk_direcciones = COALESCE($7, fk_direcciones),
             direccion_consultada = TRUE,
             direccion_encontrada = TRUE,
-            fecha_consulta_direccion = NOW()
-          WHERE numero_documento = $1 AND tipo_documento = $2
+            error_consulta_direccion = NULL,
+            fecha_consulta_direccion = NOW(),
+            fecha_actualizacion = NOW()
+          WHERE numero_documento = $1
           RETURNING id_per_natural_dir
-        `, [numDoc, tipoDoc, nombres, apellidos, primeraDir.celular || primeraDir.telefono || null, primeraDir.correoElectronico || null]);
-        
-        // Si no existía, hacer INSERT
-        if (updateResult.rowCount === 0) {
-          await client.query(`
-            INSERT INTO persona_natural_propietario (
-              tipo_documento,
-              numero_documento,
-              nombres,
-              apellidos,
-              estado_runt_persona,
-              celular,
-              correo,
-              direccion_consultada,
-              direccion_encontrada,
-              fecha_consulta_direccion
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
-          `, [
-            tipoDoc,
-            numDoc,
-            nombres || null,
-            apellidos || null,
-            true,
-            primeraDir.celular || primeraDir.telefono || null,
-            primeraDir.correoElectronico || null,
-            true,
-            true
-          ]);
+        `, [
+          numDoc,
+          tipoDoc,
+          nombres || null,
+          apellidos || null,
+          telefono,
+          correo,
+          idDireccion
+        ]);
+
+        if (updatePersona.rowCount === 0) {
+          throw new Error(`No existe persona_natural_propietario para documento ${numDoc}`);
         }
       }
     }

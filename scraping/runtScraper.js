@@ -751,7 +751,10 @@ exports.scrapeDireccionesPN = async ({
       page,
       screenshotsDir,
       `runt-direcciones-${documento}.png`
-    );
+    ).catch(error => {
+      console.warn('⚠️ No se pudo guardar screenshot de éxito:', error.message);
+      return null;
+    });
 
     // NO guardar aquí - el worker centraliza el guardado en DB via guardar-resultado
     // const dbResult = await guardarDireccionPersona({
