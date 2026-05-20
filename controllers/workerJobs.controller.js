@@ -1118,30 +1118,60 @@ exports.guardarResultadoScraping = async (req, res) => {
       const numDoc = resultado.numeroDocumento || '';
       
       if (resultado.ok && resultado.direcciones?.length > 0) {
-        // Insertar cada dirección
-        for (const dir of resultado.direcciones) {
-          await client.query(`
-            INSERT INTO direcciones (
-              direccion, municio_departamento, telefono, tipo_direccion, estado_direccion
-            ) VALUES ($1,$2,$3,$4,$5)
-            ON CONFLICT DO NOTHING
-          `, [
-            dir.direccion || null,
-            dir.municipioDepartamento || dir.municio_departamento || null,
-            dir.telefono || null,
-            dir.tipoDireccion || dir.tipo_direccion || null,
-            true
-          ]);
+        // 1. Eliminar direcciones anteriores de esta persona para evitar duplicados
+        // Primero obtener el id de la persona
+        const personaResult = await client.query(
+          'SELECT id_per_natural_dir FROM persona_natural_propietario WHERE numero_documento = $1',
+          [numDoc]
+        );
+        
+        const idPersona = personaResult.rows[0]?.id_per_natural_dir;
+        
+        // Si existe persona, limpiar sus direcciones anteriores
+        if (idPersona) {
+          await client.query(
+            'DELETE FROM persona_natural_propietario WHERE numero_documento = $1',
+            [numDoc]
+          );
         }
-
-        // Actualizar persona_natural_propietario
+        
+        // 2. Re-insertar la persona con la nueva info
+        const primeraDir = resultado.direcciones[0] || {};
+        const nombres = (primeraDir.nombres || '').split(' ').slice(0, -1).join(' ');
+        const apellidos = (primeraDir.nombres || '').split(' ').slice(-1).join(' ');
+        
         await client.query(`
-          UPDATE persona_natural_propietario
-          SET direccion_consultada = TRUE,
-              direccion_encontrada = TRUE,
-              fecha_consulta_direccion = NOW()
-          WHERE numero_documento = $1
-        `, [numDoc]);
+          INSERT INTO persona_natural_propietario (
+            tipo_documento,
+            numero_documento,
+            nombres,
+            apellidos,
+            estado_runt_persona,
+            celular,
+            correo,
+            direccion_consultada,
+            direccion_encontrada,
+            fecha_consulta_direccion
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+          ON CONFLICT (numero_documento) DO UPDATE SET
+            nombres = EXCLUDED.nombres,
+            apellidos = EXCLUDED.apellidos,
+            celular = COALESCE(persona_natural_propietario.celular, EXCLUDED.celular),
+            correo = COALESCE(persona_natural_propietario.correo, EXCLUDED.correo),
+            direccion_consultada = TRUE,
+            direccion_encontrada = TRUE,
+            fecha_consulta_direccion = NOW()
+        `, [
+          tipoDoc,
+          numDoc,
+          nombres || null,
+          apellidos || null,
+          true,
+          primeraDir.telefono || primeraDir.celular || null,
+          primeraDir.correoElectronico || primeraDir.correo || null,
+          true,
+          true
+        ]);
       }
     }
 

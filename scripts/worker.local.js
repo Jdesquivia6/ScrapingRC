@@ -290,7 +290,7 @@ async function resolverItem(modulo, payload) {
 
     try {
       console.log(`[worker] Consultando direcciones ${tipoDocumento} ${numeroDocumento}...`);
-      const result = await scrapeRunt(tipoDocumento, numeroDocumento);
+      const result = await scrapeDireccionesPN({ tipoDocumento, numeroDocumento });
 
       if (result.sessionExpired || result.error?.includes('sesion')) {
         return {

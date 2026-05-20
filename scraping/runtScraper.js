@@ -753,21 +753,21 @@ exports.scrapeDireccionesPN = async ({
       `runt-direcciones-${documento}.png`
     );
 
-    const dbResult = await guardarDireccionPersona({
-      numeroDocumento: documento,
-      rawData
-    });
+    // NO guardar aquí - el worker centraliza el guardado en DB via guardar-resultado
+    // const dbResult = await guardarDireccionPersona({
+    //   numeroDocumento: documento,
+    //   rawData
+    // });
 
     return {
       ok: true,
-      documento,
+      tipoDocumento,
+      numeroDocumento: documento,
+      direcciones: items,
       totalDirecciones: items.length,
       data: items,
-      db: dbResult,
       screenshotPath,
-      message: dbResult.saved
-        ? 'Consulta ejecutada y datos guardados correctamente'
-        : 'Consulta ejecutada, pero no se pudo asociar a persona_natural_propietario'
+      message: 'Consulta ejecutada correctamente'
     };
 
   } catch (error) {
@@ -783,7 +783,8 @@ exports.scrapeDireccionesPN = async ({
 
     return {
       ok: false,
-      documento,
+      tipoDocumento,
+      numeroDocumento: documento,
       error: error.message,
       screenshotPath
     };
