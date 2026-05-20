@@ -1118,60 +1118,54 @@ exports.guardarResultadoScraping = async (req, res) => {
       const numDoc = resultado.numeroDocumento || '';
       
       if (resultado.ok && resultado.direcciones?.length > 0) {
-        // 1. Eliminar direcciones anteriores de esta persona para evitar duplicados
-        // Primero obtener el id de la persona
-        const personaResult = await client.query(
-          'SELECT id_per_natural_dir FROM persona_natural_propietario WHERE numero_documento = $1',
-          [numDoc]
-        );
-        
-        const idPersona = personaResult.rows[0]?.id_per_natural_dir;
-        
-        // Si existe persona, limpiar sus direcciones anteriores
-        if (idPersona) {
-          await client.query(
-            'DELETE FROM persona_natural_propietario WHERE numero_documento = $1',
-            [numDoc]
-          );
-        }
-        
-        // 2. Re-insertar la persona con la nueva info
         const primeraDir = resultado.direcciones[0] || {};
-        const nombres = (primeraDir.nombres || '').split(' ').slice(0, -1).join(' ');
-        const apellidos = (primeraDir.nombres || '').split(' ').slice(-1).join(' ');
         
-        await client.query(`
-          INSERT INTO persona_natural_propietario (
-            tipo_documento,
-            numero_documento,
-            nombres,
-            apellidos,
-            estado_runt_persona,
-            celular,
-            correo,
-            direccion_consultada,
-            direccion_encontrada,
-            fecha_consulta_direccion
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
-          ON CONFLICT (numero_documento) DO UPDATE SET
-            nombres = EXCLUDED.nombres,
-            apellidos = EXCLUDED.apellidos,
-            celular = COALESCE(persona_natural_propietario.celular, EXCLUDED.celular),
-            correo = COALESCE(persona_natural_propietario.correo, EXCLUDED.correo),
+        // Armar nombres y apellidos desde los campos del scraper
+        const nombres = [primeraDir.primerNombre, primeraDir.segundoNombre].filter(Boolean).join(' ');
+        const apellidos = [primeraDir.primerApellido, primeraDir.segundoApellido].filter(Boolean).join(' ');
+        
+        // Intentar UPDATE primero (más seguro si no hay unique constraint)
+        const updateResult = await client.query(`
+          UPDATE persona_natural_propietario
+          SET 
+            nombres = COALESCE(NULLIF($3, ''), nombres),
+            apellidos = COALESCE(NULLIF($4, ''), apellidos),
+            celular = COALESCE(NULLIF($5, ''), celular),
+            correo = COALESCE(NULLIF($6, ''), correo),
             direccion_consultada = TRUE,
             direccion_encontrada = TRUE,
             fecha_consulta_direccion = NOW()
-        `, [
-          tipoDoc,
-          numDoc,
-          nombres || null,
-          apellidos || null,
-          true,
-          primeraDir.telefono || primeraDir.celular || null,
-          primeraDir.correoElectronico || primeraDir.correo || null,
-          true,
-          true
-        ]);
+          WHERE numero_documento = $1 AND tipo_documento = $2
+          RETURNING id_per_natural_dir
+        `, [numDoc, tipoDoc, nombres, apellidos, primeraDir.celular || primeraDir.telefono || null, primeraDir.correoElectronico || null]);
+        
+        // Si no existía, hacer INSERT
+        if (updateResult.rowCount === 0) {
+          await client.query(`
+            INSERT INTO persona_natural_propietario (
+              tipo_documento,
+              numero_documento,
+              nombres,
+              apellidos,
+              estado_runt_persona,
+              celular,
+              correo,
+              direccion_consultada,
+              direccion_encontrada,
+              fecha_consulta_direccion
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+          `, [
+            tipoDoc,
+            numDoc,
+            nombres || null,
+            apellidos || null,
+            true,
+            primeraDir.celular || primeraDir.telefono || null,
+            primeraDir.correoElectronico || null,
+            true,
+            true
+          ]);
+        }
       }
     }
 
