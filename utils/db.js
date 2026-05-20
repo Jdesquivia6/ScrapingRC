@@ -8,4 +8,9 @@ const pool = new Pool({
   port: 5432,
 });
 
+// Establecer timezone Colombia al iniciar pool
+pool.on('connect', async (client) => {
+  await client.query("SET TIME ZONE 'America/Bogota'").catch(() => {});
+});
+
 module.exports = pool;
