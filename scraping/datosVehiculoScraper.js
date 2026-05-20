@@ -451,8 +451,14 @@ exports.scrapeDatosVehiculo = async ({
     }
 
     const resultadoRespuesta = await responsePromise;
-    // waitForResponse retorna el response object que tiene .json()
-    const data = await resultadoRespuesta.json();
+
+    if (resultadoRespuesta.tipo !== 'data') {
+      throw new Error(
+        'No llegó respuesta JSON y tampoco apareció alerta visible'
+      );
+    }
+
+    const data = resultadoRespuesta.data;
 
     if (!data || !data.datos) {
       throw new Error(
