@@ -1072,6 +1072,7 @@ exports.guardarResultadoScraping = async (req, res) => {
     // ================================================
     else if (modulo === 'datos-vehiculo') {
       const placa = resultado.placa || '';
+      const datosVehiculo = resultado.datos_vehiculo || {};
       
       // Obtener id de la placa
       const placaResult = await client.query(
@@ -1090,7 +1091,6 @@ exports.guardarResultadoScraping = async (req, res) => {
           [id_consul_placa]
         );
 
-        // Luego insertar nuevo registro
         await client.query(`
           INSERT INTO runt_datos_vehiculos (
             clase, marca, linea, servicio, color, modelo,

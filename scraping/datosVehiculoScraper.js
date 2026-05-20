@@ -347,6 +347,7 @@ async function aceptarAlertaSiExiste(page) {
   }
 }
 
+
 // COMMENTED: El worker ahora maneja el guardado en DB
 // async function guardarErrorDatosVehiculo({
 //   id_consul_placa,
@@ -370,6 +371,7 @@ async function aceptarAlertaSiExiste(page) {
 //     console.error('❌ Error guardando fallo datos vehículo:', dbError.message);
 //   }
 // }
+
 
 exports.scrapeDatosVehiculo = async ({
   placa,
@@ -440,9 +442,6 @@ exports.scrapeDatosVehiculo = async ({
       if (esSesion) {
         return respuestaSesionVencida(placaNormalizada);
       }
-
-      // El worker ahora maneja el guardado de errores en DB
-      // await guardarErrorDatosVehiculo({...})
 
       return {
         ok: false,
@@ -536,9 +535,6 @@ exports.scrapeDatosVehiculo = async ({
     await client.query('ROLLBACK').catch(() => {});
 
     console.error('❌ Error datos vehículo:', error.message);
-
-    // El worker ahora maneja el guardado de errores en DB
-    // await guardarErrorDatosVehiculo({...})
 
     await cancelarBusquedaSiExiste(page);
 
