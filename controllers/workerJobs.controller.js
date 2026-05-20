@@ -1072,7 +1072,6 @@ exports.guardarResultadoScraping = async (req, res) => {
     // ================================================
     else if (modulo === 'datos-vehiculo') {
       const placa = resultado.placa || '';
-      const datosVehiculo = resultado.datos_vehiculo || {};
       
       // Obtener id de la placa
       const placaResult = await client.query(
