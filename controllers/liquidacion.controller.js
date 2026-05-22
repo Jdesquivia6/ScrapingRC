@@ -146,12 +146,11 @@ exports.consultarLiquidacion = async (req, res) => {
         mensaje: resultado.mensaje
       }
     });
-    } catch (error) {
-      return res.status(500).json({
-        ok: false,
-        error: error.message || 'Error interno del servidor'
-      });
-    }
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message || 'Error interno del servidor'
+    });
   }
 };
 
