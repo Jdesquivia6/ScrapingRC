@@ -1,60 +1,107 @@
+const path = require('path');
+const fs = require('fs');
 const { scrapeLiquidacionTramite } = require('../scraping/liquidacionScraper');
 
-/**
- * Valida que los datos mínimos para RNA estén presentes.
- * Solo RNA, placa + trámite + clasificación.
- */
-function validarItemLiquidacion(data) {
-  const placa = (data.placa || '').toString().trim().toUpperCase();
-  const tramite = (data.tramite || '').toString().trim();
-  const clasificacion = (data.clasificacion || '').toString().trim();
+const DOWNLOAD_DIR = path.join(process.cwd(), 'downloads');
 
+/**
+ * Valores permitidos para RNA.
+ */
+const TRAMITES_VALIDOS = [
+  'TRÁMITE MATRÍCULA INICIAL',
+  'TRÁMITE INSCRIPCIÓN ALERTA'
+];
+
+const CLASIFICACIONES_VALIDAS = [
+  'AUTOMOVIL',
+  'MEDIDAS CAUTELARES',
+  'MOTO',
+  'MOTOCARRO'
+];
+
+/**
+ * Valida un solo item de trámite (tramite + clasificacion).
+ */
+function validarItemTramite(item, index) {
+  const tramite = (item.tramite || '').toString().trim().toUpperCase();
+  const clasificacion = (item.clasificacion || '').toString().trim().toUpperCase();
+  const errores = [];
+
+  if (!tramite) {
+    errores.push(`El trámite es obligatorio (item ${index + 1})`);
+  } else if (!TRAMITES_VALIDOS.includes(tramite)) {
+    errores.push(`Trámite no válido (item ${index + 1}): "${tramite}". Permitidos: ${TRAMITES_VALIDOS.join(', ')}`);
+  }
+
+  if (!clasificacion) {
+    errores.push(`La clasificación es obligatoria (item ${index + 1})`);
+  } else if (!CLASIFICACIONES_VALIDAS.includes(clasificacion)) {
+    errores.push(`Clasificación no válida (item ${index + 1}): "${clasificacion}". Permitidas: ${CLASIFICACIONES_VALIDAS.join(', ')}`);
+  }
+
+  if (errores.length > 0) {
+    return { ok: false, errores };
+  }
+
+  return {
+    ok: true,
+    data: { tramite, clasificacion }
+  };
+}
+
+/**
+ * Extrae y valida el payload completo del request.
+ * Soporta tanto el formato nuevo (tramites array) como el legacy (tramite + clasificacion individual).
+ */
+function parsePayload(body) {
+  const placa = (body.placa || '').toString().trim().toUpperCase();
   if (!placa) {
     return { ok: false, error: 'La placa es obligatoria' };
   }
 
-  if (!tramite) {
-    return { ok: false, error: 'El trámite es obligatorio para RNA' };
+  let tramites = [];
+
+  // Formato nuevo: tramites array
+  if (body.tramites && Array.isArray(body.tramites)) {
+    tramites = body.tramites;
   }
-
-  if (!clasificacion) {
-    return { ok: false, error: 'La clasificación es obligatoria' };
-  }
-
-  // Validar que sean valores permitidos
-  const tramitesValidos = [
-    'TRÁMITE MATRÍCULA INICIAL',
-    'TRÁMITE INSCRIPCIÓN ALERTA'
-  ];
-
-  if (!tramitesValidos.includes(tramite.toUpperCase())) {
+  // Formato legacy: tramite + clasificacion individual
+  else if (body.tramite) {
+    tramites = [
+      { tramite: body.tramite, clasificacion: body.clasificacion || '' }
+    ];
+  } else {
     return {
       ok: false,
-      error: `Trámite no válido para RNA. Valores permitidos: ${tramitesValidos.join(', ')}`
+      error: 'Debe enviar un array "tramites" con al menos un trámite, o los campos "tramite" + "clasificacion" (legacy)'
     };
   }
 
-  const clasificacionesValidas = [
-    'AUTOMOVIL',
-    'MEDIDAS CAUTELARES',
-    'MOTO',
-    'MOTOCARRO'
-  ];
+  if (tramites.length === 0) {
+    return { ok: false, error: 'Debe enviar al menos un trámite en el array "tramites"' };
+  }
 
-  if (!clasificacionesValidas.includes(clasificacion.toUpperCase())) {
-    return {
-      ok: false,
-      error: `Clasificación no válida. Valores permitidos: ${clasificacionesValidas.join(', ')}`
-    };
+  // Validar cada trámite
+  const erroresGlobales = [];
+  const tramitesValidos = [];
+  for (let i = 0; i < tramites.length; i++) {
+    const validacion = validarItemTramite(tramites[i], i);
+    if (!validacion.ok) {
+      erroresGlobales.push(...validacion.errores);
+    } else {
+      tramitesValidos.push(validacion.data);
+    }
+  }
+
+  if (erroresGlobales.length > 0) {
+    return { ok: false, error: erroresGlobales.join('; ') };
   }
 
   return {
     ok: true,
     data: {
-      registro: 'RNA',
       placa,
-      tramite: tramite.toUpperCase(),
-      clasificacion: clasificacion.toUpperCase()
+      tramites: tramitesValidos
     }
   };
 }
@@ -68,16 +115,15 @@ exports.consultarLiquidacion = async (req, res) => {
       });
     }
 
-    const validacion = validarItemLiquidacion(req.body);
-
-    if (!validacion.ok) {
-      return res.status(400).json({
-        ok: false,
-        error: validacion.error
-      });
+    const parsed = parsePayload(req.body);
+    if (!parsed.ok) {
+      return res.status(400).json({ ok: false, error: parsed.error });
     }
 
-    const resultado = await scrapeLiquidacionTramite(validacion.data);
+    const resultado = await scrapeLiquidacionTramite({
+      placa: parsed.data.placa,
+      tramites: parsed.data.tramites
+    });
 
     if (!resultado.ok) {
       return res.status(500).json({
@@ -89,29 +135,61 @@ exports.consultarLiquidacion = async (req, res) => {
     return res.json({
       ok: true,
       data: {
-        registro: resultado.data?.registro,
+        registro: 'RNA',
         tipoDocumentoSolicitante: resultado.data?.tipoDocumentoSolicitante,
         numeroDocumentoSolicitante: resultado.data?.numeroDocumentoSolicitante,
         nombreSolicitante: resultado.data?.nombreSolicitante,
         placa: resultado.data?.placa,
-        tramite: resultado.data?.tramite,
-        clasificacion: resultado.data?.clasificacion,
-        tarifa: resultado.data?.tarifa || null,
+        tramites: resultado.data?.tramites || [],
         tramitesTabla: resultado.data?.tramitesTabla || [],
         descarga: resultado.data?.descarga || null,
         mensaje: resultado.mensaje
       }
     });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error interno del servidor'
+      });
+    }
+  }
+};
+
+/**
+ * Descarga un PDF de liquidación por nombre de archivo.
+ * GET /api/liquidacion/descargar/:fileName
+ */
+exports.descargarLiquidacion = async (req, res) => {
+  try {
+    const { fileName } = req.params;
+
+    if (!fileName || !fileName.endsWith('.pdf')) {
+      return res.status(400).json({ ok: false, error: 'Nombre de archivo inválido' });
+    }
+
+    // Sanitizar: solo permitir nombres de archivo seguros
+    const safeName = path.basename(fileName);
+    const filePath = path.join(DOWNLOAD_DIR, safeName);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ ok: false, error: 'Archivo no encontrado' });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    
+    const stream = fs.createReadStream(filePath);
+    stream.pipe(res);
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      error: error.message || 'Error interno del servidor'
+      error: error.message || 'Error al descargar el archivo'
     });
   }
 };
 
 /**
- * Batch — solo acepta items RNA válidos.
+ * Batch — cada item puede tener múltiples trámites (misma placa) o ser legacy (un solo trámite).
  */
 exports.consultarLiquidacionBatch = async (req, res) => {
   try {
@@ -136,34 +214,37 @@ exports.consultarLiquidacionBatch = async (req, res) => {
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      const validacion = validarItemLiquidacion(item);
+      const parsed = parsePayload(item);
 
-      if (!validacion.ok) {
+      if (!parsed.ok) {
         resultados.push({
           index: i,
           ok: false,
-          error: validacion.error,
+          error: parsed.error,
           entrada: item
         });
         continue;
       }
 
       try {
-        const resultado = await scrapeLiquidacionTramite(validacion.data);
+        const resultado = await scrapeLiquidacionTramite({
+          placa: parsed.data.placa,
+          tramites: parsed.data.tramites
+        });
 
         resultados.push({
           index: i,
           ok: resultado.ok,
-          data: resultado.ok ? resultado : null,
+          data: resultado.ok ? resultado.data : null,
           error: resultado.ok ? null : resultado.error,
-          entrada: validacion.data
+          entrada: parsed.data
         });
       } catch (error) {
         resultados.push({
           index: i,
           ok: false,
           error: error.message || 'Error procesando item batch',
-          entrada: validacion.data
+          entrada: parsed.data
         });
       }
     }

@@ -5,14 +5,16 @@
  *   1) Diligenciar solicitante (NIT + 901769233 → nombre automático)
  *   2) Seleccionar registro RNA
  *   3) Doble digitación de placa
- *   4) Seleccionar trámite (MATRICULA INICIAL | INSCRIPCIÓN ALERTA)
- *   5) Seleccionar clasificación (AUTOMOVIL | MEDIDAS CAUTELARES | MOTO | MOTOCARRO)
- *   6) Tarifa automática según combo trámite + clasificación
- *      - Con SweetAlert para MEDIDAS CAUTELARES
- *   7) Click Generar → interceptar API /liquidacion/generar → capturar PDF (base64)
- *   8) Aceptar SweetAlert de éxito
+ *   4) Para cada trámite en el array:
+ *      a) Seleccionar trámite (MATRICULA INICIAL | INSCRIPCIÓN ALERTA)
+ *      b) Si es el primero: seleccionar clasificación (AUTOMOVIL | MEDIDAS CAUTELARES | MOTO | MOTOCARRO)
+ *         Si es subsiguiente: la clasificación ya está seleccionada
+ *      c) Tarifa automática según combo trámite + clasificación
+ *         - Con SweetAlert para MEDIDAS CAUTELARES
+ *   5) Click Generar → interceptar API /liquidacion/generar → capturar PDF (base64)
+ *   6) Aceptar SweetAlert de éxito
  *
- * Una sola liquidación por request.
+ * Todos los trámites comparten la misma clasificación (flujo RUNT real).
  */
 
 const fs = require('fs');
@@ -545,11 +547,14 @@ async function prepararPagina(page) {
 
 /**
  * Ejecuta el flujo completo de liquidación RUNT para RNA.
+ * Soporta múltiples trámites en una sola liquidación.
  *
  * @param {Object} options
  * @param {string} options.placa         - Placa del vehículo
- * @param {string} options.tramite       - "TRÁMITE MATRÍCULA INICIAL" | "TRÁMITE INSCRIPCIÓN ALERTA"
- * @param {string} options.clasificacion - AUTOMOVIL | MEDIDAS CAUTELARES | MOTO | MOTOCARRO
+ * @param {Array<{tramite: string, clasificacion: string}>} options.tramites
+ *   - Array de trámites a liquidar (1 o 2 elementos)
+ *   - Ej: [{ tramite: "TRÁMITE MATRÍCULA INICIAL", clasificacion: "AUTOMOVIL" },
+ *           { tramite: "TRÁMITE INSCRIPCIÓN ALERTA", clasificacion: "AUTOMOVIL" }]
  *
  * @returns {Promise<{
  *   ok: boolean,
@@ -558,8 +563,8 @@ async function prepararPagina(page) {
  *   data?: {
  *     registro: string,
  *     tipoDocumentoSolicitante, numeroDocumentoSolicitante, nombreSolicitante,
- *     placa, tramite, clasificacion,
- *     tarifa: { tipo, tarifa, descripcion } | null,
+ *     placa,
+ *     tramites: Array<{tramite, clasificacion, tarifa}>,
  *     tramitesTabla: Array,
  *     descarga: { fileName, filePath, tamanoBytes, liquidacionId, apiResponse }
  *   }
@@ -568,8 +573,7 @@ async function prepararPagina(page) {
 async function scrapeLiquidacionTramite({
   registro,  // Se ignora — siempre RNA
   placa,
-  tramite,
-  clasificacion,
+  tramites,  // Array de {tramite, clasificacion}
   ...rest   // Ignoramos tipoDocumento, numeroDocumento, tarifa
 }) {
   let page = null;
@@ -578,6 +582,13 @@ async function scrapeLiquidacionTramite({
     const session = await connectToChrome();
     page = session.page;
     console.log('[scraper] Sesión Chrome obtenida');
+
+    if (!tramites || !Array.isArray(tramites) || tramites.length === 0) {
+      throw new Error('Debe enviar al menos un trámite en el array "tramites"');
+    }
+
+    console.log(`[scraper] Procesando ${tramites.length} trámite(s):`,
+      tramites.map(t => `${t.tramite} (${t.clasificacion})`).join(', '));
 
     // ── Navegación ──
     await prepararPagina(page);
@@ -597,33 +608,60 @@ async function scrapeLiquidacionTramite({
     const datosPlaca = await procesarPlaca(page, placa);
     console.log('[scraper] Placa OK:', datosPlaca.placa);
 
-    // ── 4) Trámite ──
-    console.log('[scraper] Seleccionando trámite...');
-    const tramiteSeleccionado = await seleccionarTramite(page, tramite);
-    console.log('[scraper] Trámite OK:', tramiteSeleccionado);
+    // ── 4) Iterar sobre cada trámite ──
+    const tramitesProcesados = [];
+    let primeraClasificacion = null;
 
-    // ── 5) Clasificación ──
-    console.log('[scraper] Seleccionando clasificación...');
-    const clasificacionSeleccionada = await seleccionarClasificacion(page, clasificacion);
-    console.log('[scraper] Clasificación OK:', clasificacionSeleccionada);
+    for (let i = 0; i < tramites.length; i++) {
+      const { tramite, clasificacion } = tramites[i];
+      console.log(`[scraper] === Trámite ${i + 1}/${tramites.length}: ${tramite} ===`);
 
-    // ── 6) Tarifa automática (según combo trámite + clasificación) ──
-    console.log('[scraper] Resolviendo tarifa...');
-    const tarifaResultado = await resolverTarifa(page, tramiteSeleccionado, clasificacionSeleccionada);
-    console.log('[scraper] Tarifa OK:', JSON.stringify(tarifaResultado));
+      // ── 4a) Seleccionar trámite ──
+      console.log(`[scraper] Seleccionando trámite...`);
+      const tramiteSeleccionado = await seleccionarTramite(page, tramite);
+      console.log(`[scraper] Trámite OK: ${tramiteSeleccionado}`);
 
-    // ── 7) Leer tabla de trámites ──
+      // ── 4b) Seleccionar clasificación (solo la primera vez, luego RUNT la mantiene) ──
+      let clasificacionSeleccionada = null;
+      if (i === 0) {
+        console.log(`[scraper] Seleccionando clasificación: ${clasificacion}...`);
+        clasificacionSeleccionada = await seleccionarClasificacion(page, clasificacion);
+        primeraClasificacion = clasificacionSeleccionada;
+        console.log(`[scraper] Clasificación OK: ${clasificacionSeleccionada}`);
+      } else {
+        // La clasificación ya está seleccionada del trámite anterior
+        clasificacionSeleccionada = primeraClasificacion;
+        console.log(`[scraper] Clasificación ya seleccionada: ${clasificacionSeleccionada}`);
+        await pausa(page, 1000, 2000);
+      }
+
+      // ── 4c) Tarifa automática (según combo trámite + clasificación) ──
+      console.log(`[scraper] Resolviendo tarifa...`);
+      const tarifaResultado = await resolverTarifa(page, tramiteSeleccionado, clasificacionSeleccionada);
+      console.log(`[scraper] Tarifa OK:`, JSON.stringify(tarifaResultado));
+
+      tramitesProcesados.push({
+        tramite: tramiteSeleccionado,
+        clasificacion: clasificacionSeleccionada,
+        tarifa: tarifaResultado
+      });
+
+      // Pausa entre trámites para que Angular procese la tabla
+      await pausa(page, 1500, 3000);
+    }
+
+    // ── 5) Leer tabla de trámites ──
     await pausa(page, 2000, 3000);
     const tramitesTabla = await leerTablaTramites(page);
     console.log('[scraper] Tabla filas:', tramitesTabla.length);
     validarTramitesLiquidables(tramitesTabla);
 
-    // ── 8) Generar y capturar PDF por API ──
+    // ── 6) Generar y capturar PDF por API ──
     console.log('[scraper] Generando PDF...');
     const descarga = await generarYCapturarPDF(page);
     console.log('[scraper] PDF OK:', descarga.fileName, descarga.tamanoBytes + ' bytes');
 
-    // ── 9) Aceptar SweetAlert de éxito ──
+    // ── 7) Aceptar SweetAlert de éxito ──
     await aceptarSweetAlertExito(page);
     console.log('[scraper] SweetAlert éxito aceptado');
 
@@ -634,9 +672,7 @@ async function scrapeLiquidacionTramite({
         registro: 'RNA',
         ...datosSolicitante,
         ...datosPlaca,
-        tramite: tramiteSeleccionado,
-        clasificacion: clasificacionSeleccionada,
-        tarifa: tarifaResultado,
+        tramites: tramitesProcesados,
         tramitesTabla,
         descarga
       }

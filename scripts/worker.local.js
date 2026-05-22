@@ -329,7 +329,28 @@ async function resolverItem(modulo, payload) {
   if (modulo === 'liquidaciones' || modulo === 'liquidacion') {
     try {
       console.log(`[worker] Consultando liquidacion...`);
-      const result = await scrapeLiquidacionTramite(payload);
+
+      // Adaptar payload legacy (tramite + clasificacion individual) al nuevo formato (tramites array)
+      let payloadAdaptado;
+      if (payload.tramites && Array.isArray(payload.tramites)) {
+        payloadAdaptado = payload; // Ya está en nuevo formato
+      } else if (payload.tramite) {
+        // Formato legacy: convertir a array
+        payloadAdaptado = {
+          placa: payload.placa,
+          tramites: [{
+            tramite: payload.tramite,
+            clasificacion: payload.clasificacion || ''
+          }]
+        };
+      } else {
+        return {
+          estado: 'fallido',
+          error: 'Payload no válido: se espera "tramites" array o "tramite" individual'
+        };
+      }
+
+      const result = await scrapeLiquidacionTramite(payloadAdaptado);
 
       if (!result.ok) {
         return {

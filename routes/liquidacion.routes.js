@@ -3,13 +3,17 @@ const router = express.Router();
 
 const {
   consultarLiquidacion,
-  consultarLiquidacionBatch
+  consultarLiquidacionBatch,
+  descargarLiquidacion
 } = require('../controllers/liquidacion.controller');
 
-// Consulta individual
+// Consulta individual (soporta múltiples trámites)
 router.post('/consultar-liquidacion', consultarLiquidacion);
 
 // Consulta masiva
 router.post('/consultar-liquidacion-batch', consultarLiquidacionBatch);
+
+// Descargar PDF
+router.get('/descargar/:fileName', descargarLiquidacion);
 
 module.exports = router;
