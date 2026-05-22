@@ -60,14 +60,21 @@ async function pausa(page, min = 600, max = 1400) {
 // HELPERS DE ESPERA ANGULAR/MATERIAL
 // ─────────────────────────────────────────────
 
+/**
+ * Espera que un elemento sea visible y no esté deshabilitado.
+ * NO verifica ng-invalid porque Angular lo pone en campos requeridos vacíos (normal).
+ */
 async function esperarElementoHabilitado(page, selector, timeout = 15000) {
   const locator = page.locator(selector).first();
   await locator.waitFor({ state: 'visible', timeout });
+  // Solo verificar disabled real, no ng-invalid (Angular pone ng-invalid en campos vacíos)
   await page.waitForFunction(
     (sel) => {
       const el = document.querySelector(sel);
       if (!el) return false;
-      return !(el.classList.contains('ng-invalid') || el.disabled);
+      if (el.disabled) return false;
+      if (el.getAttribute('aria-disabled') === 'true') return false;
+      return true;
     },
     selector,
     { timeout }
@@ -116,44 +123,45 @@ async function seleccionarOpcionMatSelect(page, selector, textoOpcion) {
   if (!valor) return;
 
   await esperarElementoHabilitado(page, selector);
-  await pausa(page, 400, 900);
+  await pausa(page, 500, 1000);
 
+  // Click para abrir el panel
   const select = page.locator(selector).first();
   await select.click();
-  await pausa(page, 600, 1200);
+  await pausa(page, 800, 1500);
 
-  // Esperar que el panel se abra
-  await page.waitForFunction(
-    () => {
-      const panel = document.querySelector('.mat-select-panel');
-      if (!panel) return false;
-      const style = window.getComputedStyle(panel);
-      return style.display !== 'none' && style.visibility !== 'hidden';
-    },
-    { timeout: 10000 }
-  );
+  // Esperar que aparezca al menos un mat-option (el panel se abrió)
+  const opciones = page.locator('mat-option, .mat-option-text');
+  try {
+    await opciones.first().waitFor({ state: 'visible', timeout: 10000 });
+  } catch {
+    // Si no aparecen opciones, el select puede estar vacío o bloqueado
+    // Intentar cerrar el panel haciendo click fuera
+    await page.mouse.click(10, 10);
+    throw new Error(`No aparecieron opciones en ${selector} al seleccionar "${valor}"`);
+  }
 
-  // Buscar opción por texto
+  await pausa(page, 300, 600);
+
+  // Buscar opción por texto exacto o parcial
   let opcion = page.locator('mat-option').filter({ hasText: valor }).first();
-  if (await opcion.count()) {
-    await opcion.waitFor({ state: 'visible', timeout: 10000 });
+  if (await opcion.count() && await opcion.isVisible().catch(() => false)) {
     await pausa(page, 200, 500);
     await opcion.click();
     await esperarCierreOverlaysMatSelect(page);
     return;
   }
 
-  // Fallback por .mat-option-text
+  // Fallback: buscar por .mat-option-text
   const opcionTexto = page.locator('.mat-option-text').filter({ hasText: valor }).first();
-  if (await opcionTexto.count()) {
-    await opcionTexto.waitFor({ state: 'visible', timeout: 10000 });
+  if (await opcionTexto.count() && await opcionTexto.isVisible().catch(() => false)) {
     await pausa(page, 200, 500);
     await opcionTexto.click();
     await esperarCierreOverlaysMatSelect(page);
     return;
   }
 
-  throw new Error(`No se encontró la opción "${valor}" en el selector ${selector}`);
+  throw new Error(`Opción "${valor}" no encontrada en ${selector}`);
 }
 
 async function escribirLento(locator, valor) {
@@ -444,7 +452,7 @@ function validarTramitesLiquidables(tramitesTabla) {
 async function generarYCapturarPDF(page) {
   ensureDownloadDir();
 
-  // Esperar botón Generar habilitado
+  // Esperar botón Generar visible y habilitado
   const boton = page.locator('button:has-text("Generar")').first();
   await boton.waitFor({ state: 'visible', timeout: 15000 });
   await page.waitForFunction(
@@ -452,11 +460,9 @@ async function generarYCapturarPDF(page) {
       const botones = Array.from(document.querySelectorAll('button'));
       const generar = botones.find(b => b.textContent.trim().toLowerCase().startsWith('generar'));
       if (!generar) return false;
-      return !generar.disabled &&
-             !generar.classList.contains('ng-invalid') &&
-             !generar.getAttribute('aria-disabled');
+      return !generar.disabled && generar.getAttribute('aria-disabled') !== 'true';
     },
-    { timeout: 15000 }
+    { timeout: 20000 }
   );
 
   const disabled = await boton.isDisabled().catch(() => true);
@@ -571,38 +577,55 @@ async function scrapeLiquidacionTramite({
   try {
     const session = await connectToChrome();
     page = session.page;
+    console.log('[scraper] Sesión Chrome obtenida');
 
     // ── Navegación ──
     await prepararPagina(page);
+    console.log('[scraper] Página cargada');
 
     // ── 1) Solicitante ──
+    console.log('[scraper] Diligenciando solicitante...');
     const datosSolicitante = await diligenciarSolicitante(page);
+    console.log('[scraper] Solicitante OK:', datosSolicitante.nombreSolicitante);
 
     // ── 2) RNA ──
+    console.log('[scraper] Seleccionando registro RNA...');
     await seleccionarRegistroRNA(page);
 
     // ── 3) Placa ──
+    console.log('[scraper] Procesando placa...');
     const datosPlaca = await procesarPlaca(page, placa);
+    console.log('[scraper] Placa OK:', datosPlaca.placa);
 
     // ── 4) Trámite ──
+    console.log('[scraper] Seleccionando trámite...');
     const tramiteSeleccionado = await seleccionarTramite(page, tramite);
+    console.log('[scraper] Trámite OK:', tramiteSeleccionado);
 
     // ── 5) Clasificación ──
+    console.log('[scraper] Seleccionando clasificación...');
     const clasificacionSeleccionada = await seleccionarClasificacion(page, clasificacion);
+    console.log('[scraper] Clasificación OK:', clasificacionSeleccionada);
 
     // ── 6) Tarifa automática (según combo trámite + clasificación) ──
+    console.log('[scraper] Resolviendo tarifa...');
     const tarifaResultado = await resolverTarifa(page, tramiteSeleccionado, clasificacionSeleccionada);
+    console.log('[scraper] Tarifa OK:', JSON.stringify(tarifaResultado));
 
     // ── 7) Leer tabla de trámites ──
     await pausa(page, 2000, 3000);
     const tramitesTabla = await leerTablaTramites(page);
+    console.log('[scraper] Tabla filas:', tramitesTabla.length);
     validarTramitesLiquidables(tramitesTabla);
 
     // ── 8) Generar y capturar PDF por API ──
+    console.log('[scraper] Generando PDF...');
     const descarga = await generarYCapturarPDF(page);
+    console.log('[scraper] PDF OK:', descarga.fileName, descarga.tamanoBytes + ' bytes');
 
     // ── 9) Aceptar SweetAlert de éxito ──
     await aceptarSweetAlertExito(page);
+    console.log('[scraper] SweetAlert éxito aceptado');
 
     return {
       ok: true,
@@ -619,6 +642,16 @@ async function scrapeLiquidacionTramite({
       }
     };
   } catch (error) {
+    // Capturar screenshot para debug
+    try {
+      if (page) {
+        const screenshotPath = path.join(DOWNLOAD_DIR, `error_liquidacion_${Date.now()}.png`);
+        await page.screenshot({ path: screenshotPath, fullPage: false });
+        console.log('[scraper] Screenshot guardado:', screenshotPath);
+      }
+    } catch (_) { /* ignore screenshot errors */ }
+
+    console.log('[scraper] ERROR:', error.message);
     return {
       ok: false,
       error: error.message
