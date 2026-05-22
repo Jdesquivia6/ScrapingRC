@@ -329,7 +329,7 @@ async function resolverItem(modulo, payload) {
   if (modulo === 'liquidaciones' || modulo === 'liquidacion') {
     try {
       console.log(`[worker] Consultando liquidacion...`);
-      const result = await scrapeLiquidacion(payload);
+      const result = await scrapeLiquidacionTramite(payload);
 
       if (!result.ok) {
         return {

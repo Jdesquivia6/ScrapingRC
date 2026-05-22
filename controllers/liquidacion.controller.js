@@ -1,67 +1,73 @@
 const { scrapeLiquidacionTramite } = require('../scraping/liquidacionScraper');
 
-function normalizarTexto(valor) {
-  if (valor === undefined || valor === null) return '';
-  return String(valor).trim().toUpperCase();
-}
-
+/**
+ * Valida que los datos mínimos para RNA estén presentes.
+ * Solo RNA, placa + trámite + clasificación.
+ */
 function validarItemLiquidacion(data) {
-  const registro = normalizarTexto(data.registro);
-  const placa = normalizarTexto(data.placa);
-  const tipoDocumento = normalizarTexto(data.tipoDocumento);
-  const numeroDocumento = normalizarTexto(data.numeroDocumento);
+  const placa = (data.placa || '').toString().trim().toUpperCase();
   const tramite = (data.tramite || '').toString().trim();
   const clasificacion = (data.clasificacion || '').toString().trim();
-  const tarifa = (data.tarifa || '').toString().trim();
 
-  if (!registro) {
-    return { ok: false, error: 'El registro es obligatorio' };
-  }
-
-  const registrosConPlaca = ['RNA', 'RNMA', 'RNRS'];
-  const registrosConDocumento = ['RNC', 'RNPNJ'];
-  const registrosSinDatoExtra = ['RNET'];
-
-  if (
-    !registrosConPlaca.includes(registro) &&
-    !registrosConDocumento.includes(registro) &&
-    !registrosSinDatoExtra.includes(registro)
-  ) {
-    return { ok: false, error: `El registro ${registro} no es válido o no está soportado` };
-  }
-
-  if (registrosConPlaca.includes(registro) && !placa) {
-    return { ok: false, error: `La placa es obligatoria para el registro ${registro}` };
-  }
-
-  if (registrosConDocumento.includes(registro) && !tipoDocumento) {
-    return { ok: false, error: `El tipoDocumento es obligatorio para el registro ${registro}` };
-  }
-
-  if (registrosConDocumento.includes(registro) && !numeroDocumento) {
-    return { ok: false, error: `El numeroDocumento es obligatorio para el registro ${registro}` };
+  if (!placa) {
+    return { ok: false, error: 'La placa es obligatoria' };
   }
 
   if (!tramite) {
-    return { ok: false, error: 'El trámite es obligatorio' };
+    return { ok: false, error: 'El trámite es obligatorio para RNA' };
+  }
+
+  if (!clasificacion) {
+    return { ok: false, error: 'La clasificación es obligatoria' };
+  }
+
+  // Validar que sean valores permitidos
+  const tramitesValidos = [
+    'TRÁMITE MATRÍCULA INICIAL',
+    'TRÁMITE INSCRIPCIÓN ALERTA'
+  ];
+
+  if (!tramitesValidos.includes(tramite.toUpperCase())) {
+    return {
+      ok: false,
+      error: `Trámite no válido para RNA. Valores permitidos: ${tramitesValidos.join(', ')}`
+    };
+  }
+
+  const clasificacionesValidas = [
+    'AUTOMOVIL',
+    'MEDIDAS CAUTELARES',
+    'MOTO',
+    'MOTOCARRO'
+  ];
+
+  if (!clasificacionesValidas.includes(clasificacion.toUpperCase())) {
+    return {
+      ok: false,
+      error: `Clasificación no válida. Valores permitidos: ${clasificacionesValidas.join(', ')}`
+    };
   }
 
   return {
     ok: true,
     data: {
-      registro,
+      registro: 'RNA',
       placa,
-      tipoDocumento,
-      numeroDocumento,
-      tramite,
-      clasificacion,
-      tarifa
+      tramite: tramite.toUpperCase(),
+      clasificacion: clasificacion.toUpperCase()
     }
   };
 }
 
 exports.consultarLiquidacion = async (req, res) => {
   try {
+    if (!req.body || typeof req.body !== 'object') {
+      return res.status(400).json({
+        ok: false,
+        error: 'El cuerpo de la petición debe ser un objeto JSON válido'
+      });
+    }
+
     const validacion = validarItemLiquidacion(req.body);
 
     if (!validacion.ok) {
@@ -82,7 +88,19 @@ exports.consultarLiquidacion = async (req, res) => {
 
     return res.json({
       ok: true,
-      data: resultado
+      data: {
+        registro: resultado.data?.registro,
+        tipoDocumentoSolicitante: resultado.data?.tipoDocumentoSolicitante,
+        numeroDocumentoSolicitante: resultado.data?.numeroDocumentoSolicitante,
+        nombreSolicitante: resultado.data?.nombreSolicitante,
+        placa: resultado.data?.placa,
+        tramite: resultado.data?.tramite,
+        clasificacion: resultado.data?.clasificacion,
+        tarifa: resultado.data?.tarifa || null,
+        tramitesTabla: resultado.data?.tramitesTabla || [],
+        descarga: resultado.data?.descarga || null,
+        mensaje: resultado.mensaje
+      }
     });
   } catch (error) {
     return res.status(500).json({
@@ -92,6 +110,9 @@ exports.consultarLiquidacion = async (req, res) => {
   }
 };
 
+/**
+ * Batch — solo acepta items RNA válidos.
+ */
 exports.consultarLiquidacionBatch = async (req, res) => {
   try {
     const { items } = req.body;
@@ -100,6 +121,14 @@ exports.consultarLiquidacionBatch = async (req, res) => {
       return res.status(400).json({
         ok: false,
         error: 'Debe enviar un arreglo items con al menos un elemento'
+      });
+    }
+
+    const MAX_ITEMS = 10;
+    if (items.length > MAX_ITEMS) {
+      return res.status(400).json({
+        ok: false,
+        error: `El batch excede el límite máximo de ${MAX_ITEMS} items por solicitud`
       });
     }
 
