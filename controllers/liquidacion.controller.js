@@ -143,6 +143,7 @@ exports.consultarLiquidacion = async (req, res) => {
         tramites: resultado.data?.tramites || [],
         tramitesTabla: resultado.data?.tramitesTabla || [],
         descarga: resultado.data?.descarga || null,
+        archivoLiquidacion: resultado.data?.descarga?.archivoLiquidacion || null,
         mensaje: resultado.mensaje
       }
     });
@@ -175,7 +176,7 @@ exports.descargarLiquidacion = async (req, res) => {
     }
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
     
     const stream = fs.createReadStream(filePath);
     stream.pipe(res);
