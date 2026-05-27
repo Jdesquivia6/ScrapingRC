@@ -97,11 +97,14 @@ function parsePayload(body) {
     return { ok: false, error: erroresGlobales.join('; ') };
   }
 
+  const fechaLiquidacion = (body.fechaLiquidacion || '').toString().trim();
+
   return {
     ok: true,
     data: {
       placa,
-      tramites: tramitesValidos
+      tramites: tramitesValidos,
+      fechaLiquidacion: fechaLiquidacion || undefined
     }
   };
 }
@@ -122,7 +125,8 @@ exports.consultarLiquidacion = async (req, res) => {
 
     const resultado = await scrapeLiquidacionTramite({
       placa: parsed.data.placa,
-      tramites: parsed.data.tramites
+      tramites: parsed.data.tramites,
+      fechaLiquidacion: parsed.data.fechaLiquidacion
     });
 
     if (!resultado.ok) {

@@ -300,6 +300,37 @@ async function diligenciarSolicitante(page) {
 }
 
 // ─────────────────────────────────────────────
+// FECHA LIQUIDACIÓN
+// ─────────────────────────────────────────────
+
+async function diligenciarFecha(page, fecha) {
+  if (!fecha) return;
+
+  const selectores = [
+    '[formcontrolname="formFechaLiquidacion"]',
+    '[formcontrolname="fechaLiquidacion"]',
+    '[formcontrolname="formFecha"]',
+    'input[type="date"]'
+  ];
+
+  for (const selector of selectores) {
+    const input = page.locator(selector).first();
+    const existe = await input.count();
+    if (existe) {
+      await input.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+      if (await input.isVisible().catch(() => false)) {
+        await input.fill('');
+        await input.fill(fecha);
+        await pausa(page, 300, 600);
+        console.log(`[scraper] Fecha liquidación OK: ${fecha} (selector: ${selector})`);
+        return;
+      }
+    }
+  }
+  console.log('[scraper] No se encontró campo de fecha en el formulario RUNT');
+}
+
+// ─────────────────────────────────────────────
 // SECCIÓN 2: REGISTRO RNA
 // ─────────────────────────────────────────────
 
@@ -621,6 +652,7 @@ async function scrapeLiquidacionTramite({
   registro,  // Se ignora — siempre RNA
   placa,
   tramites,  // Array de {tramite, clasificacion}
+  fechaLiquidacion,  // Fecha en formato YYYY-MM-DD (opcional)
   ...rest   // Ignoramos tipoDocumento, numeroDocumento, tarifa
 }) {
   let page = null;
@@ -645,6 +677,9 @@ async function scrapeLiquidacionTramite({
     console.log('[scraper] Diligenciando solicitante...');
     const datosSolicitante = await diligenciarSolicitante(page);
     console.log('[scraper] Solicitante OK:', datosSolicitante.nombreSolicitante);
+
+    // ── 1b) Fecha liquidación ──
+    await diligenciarFecha(page, fechaLiquidacion);
 
     // ── 2) RNA ──
     console.log('[scraper] Seleccionando registro RNA...');
