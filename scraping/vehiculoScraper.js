@@ -1,5 +1,11 @@
+const axios = require('axios');
 const { connectToChrome } = require('./connectToChrome');
 const pool = require('../utils/db');
+
+// Host del servicio externo de fotodetecciones
+const EXTERNAL_API_HOST = process.env.EXTERNAL_API_HOST || '84.247.165.214';
+const LOCAL_API_HIKVISION = '10.10.20.106';
+const EXTERNAL_API_URL = `http://${LOCAL_API_HIKVISION}:5051/v1/rest/api/vehiculo-scrapping/guardar`;
 
 const URL = 'https://runtpro.runt.gov.co/#/rnfgestionsolicitud/consultar-vehiculo';
 
@@ -221,6 +227,44 @@ function respuestaSesionVencida(placaNormalizada) {
   };
 }
 
+// ─────────────────────────────────────────────
+// ENVÍO A SERVICIO EXTERNO (fotodetecciones)
+// ─────────────────────────────────────────────
+
+async function enviarAExterno(resultado) {
+  if (!resultado || !resultado.ok) return;
+
+  try {
+    const body = {
+      ok: true,
+      total: 1,
+      results: [
+        {
+          placa: resultado.placa,
+          tipo_identificacion_propietario: resultado.tipo_identificacion_propietario || null,
+          numero_identificacion_propietario: resultado.numero_identificacion_propietario || null,
+          nombre_razon_social_propietario: resultado.nombre_razon_social_propietario || null,
+          fecha_expedicion_tecno: resultado.fecha_expedicion_tecno || null,
+          fecha_vigencia_tecno: resultado.fecha_vigencia_tecno || null,
+          fecha_inicio_vigencia_soat: resultado.fecha_inicio_vigencia_soat || null,
+          fecha_vencimiento_vigencia_soat: resultado.fecha_vencimiento_vigencia_soat || null,
+          message: resultado.message || 'Scraping y guardado exitoso'
+        }
+      ]
+    };
+
+    const resp = await axios.post(EXTERNAL_API_URL, body, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000
+    });
+
+    console.log(`[enviarAExterno] ✅ Placa ${resultado.placa} enviada -> status ${resp.status}`);
+  } catch (error) {
+    // No crítico — no detiene el flujo principal
+    console.error(`[enviarAExterno] ⚠️ Error enviando placa ${resultado.placa}: ${error.message}`);
+  }
+}
+
 exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
   const { page } = await connectToChrome();
   const client = await pool.connect();
@@ -364,7 +408,7 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
     await cancelarBusquedaSiExiste(page);
 
     // Armar respuesta con toda la info
-    return {
+    const resultado = {
       ok: true,
       placa: placaNormalizada,
 
@@ -384,6 +428,11 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
 
       message: 'Scraping y guardado exitoso'
     };
+
+    // Enviar a servicio externo (fotodetecciones) — no bloqueante
+    enviarAExterno(resultado);
+
+    return resultado;
 
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
