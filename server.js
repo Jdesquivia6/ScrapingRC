@@ -14,6 +14,7 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const authRoutes = require('./routes/auth.routes');
 const usersRoutes = require('./routes/users.routes');
 const workerJobsRoutes = require('./routes/workerJobs.routes');
+const historialRoutes = require('./routes/historial.routes');
 const {
   exportarDashboardExcel
 } = require('./controllers/dashboard.controller');
@@ -36,6 +37,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/worker-jobs', workerJobsRoutes);
+app.use('/api/historial', historialRoutes);
 
 app.listen(process.env.PORT, () => {
   console.log(`API corriendo en puerto ${process.env.PORT}`);

@@ -1,5 +1,10 @@
+const axios = require('axios');
 const { connectToChrome } = require('./connectToChrome');
 const pool = require('../utils/db');
+
+// Host del servicio externo de fotodetecciones
+const API_HIKVISION = '10.10.20.108';
+const EXTERNAL_API_URL = `http://${API_HIKVISION}:5051/v1/rest/api/datos-vehiculo/guardar`;
 
 const URL = 'https://runtpro.runt.gov.co/#/rna-vehiculos-por-ident/consulta-vehiculo-por-ident/consulta';
 
@@ -372,6 +377,39 @@ async function aceptarAlertaSiExiste(page) {
 //   }
 // }
 
+async function enviarAExterno(resultado) {
+  if (!resultado || !resultado.ok || !resultado.datos_vehiculo) return;
+
+  try {
+    const body = {
+      ok: true,
+      total: 1,
+      results: [
+        {
+          placa: resultado.placa,
+          clase: resultado.datos_vehiculo.clase || null,
+          marca: resultado.datos_vehiculo.marca || null,
+          linea: resultado.datos_vehiculo.linea || null,
+          servicio: resultado.datos_vehiculo.servicio || null,
+          color: resultado.datos_vehiculo.color || null,
+          modelo: parseInt(resultado.datos_vehiculo.modelo, 10) || null,
+          capacidadPasajeros: parseInt(resultado.datos_vehiculo.capacidadPasajeros, 10) || null,
+          capacidadCargaTon: parseInt(resultado.datos_vehiculo.capacidadCargaTon, 10) || null,
+          mensaje: resultado.message || 'Datos del vehículo guardados exitosamente'
+        }
+      ]
+    };
+
+    const resp = await axios.post(EXTERNAL_API_URL, body, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000
+    });
+
+    console.log(`[enviarAExterno] ✅ Placa ${resultado.placa} datos vehículo enviados -> status ${resp.status}`);
+  } catch (error) {
+    console.error(`[enviarAExterno] ⚠️ Error enviando datos vehículo placa ${resultado.placa}: ${error.message}`);
+  }
+}
 
 exports.scrapeDatosVehiculo = async ({
   placa,
@@ -517,7 +555,7 @@ exports.scrapeDatosVehiculo = async ({
 
     await cancelarBusquedaSiExiste(page);
 
-    return {
+    const resultado = {
       ok: true,
       placa: placaNormalizada,
 
@@ -527,7 +565,9 @@ exports.scrapeDatosVehiculo = async ({
         linea: datos.lineaVehiculo,
         servicio: datos.servicio,
         color: datos.color,
-        modelo: datos.modelo
+        modelo: datos.modelo,
+        capacidadPasajeros: datos.capacidadPasajeros,
+        capacidadCargaTon: datos.capacidadCargaTon
       },
 
       // DATA COMPLETA del RUNT (para guardar en DB)
@@ -535,6 +575,11 @@ exports.scrapeDatosVehiculo = async ({
 
       message: 'Datos del vehículo guardados correctamente'
     };
+
+    // Enviar a servicio externo (fotodetecciones) — no bloqueante
+    enviarAExterno(resultado);
+
+    return resultado;
 
   } catch (error) {
 

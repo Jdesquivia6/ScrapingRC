@@ -2,10 +2,9 @@ const axios = require('axios');
 const { connectToChrome } = require('./connectToChrome');
 const pool = require('../utils/db');
 
-// Host del servicio externo de fotodetecciones
-const EXTERNAL_API_HOST = process.env.EXTERNAL_API_HOST || '84.247.165.214';
-const LOCAL_API_HIKVISION = '10.10.20.106';
-const EXTERNAL_API_URL = `http://${LOCAL_API_HIKVISION}:5051/v1/rest/api/vehiculo-scrapping/guardar`;
+// Host del servicio externo de fotodetecciones (LOCAL para pruebas)
+const API_HIKVISION = '10.10.20.108';
+const EXTERNAL_API_URL = `http://${API_HIKVISION}:5051/v1/rest/api/vehiculo-scrapping/guardar`;
 
 const URL = 'https://runtpro.runt.gov.co/#/rnfgestionsolicitud/consultar-vehiculo';
 
@@ -240,14 +239,15 @@ async function enviarAExterno(resultado) {
       total: 1,
       results: [
         {
+          ok: true,
           placa: resultado.placa,
-          tipo_identificacion_propietario: resultado.tipo_identificacion_propietario || null,
-          numero_identificacion_propietario: resultado.numero_identificacion_propietario || null,
-          nombre_razon_social_propietario: resultado.nombre_razon_social_propietario || null,
-          fecha_expedicion_tecno: resultado.fecha_expedicion_tecno || null,
-          fecha_vigencia_tecno: resultado.fecha_vigencia_tecno || null,
-          fecha_inicio_vigencia_soat: resultado.fecha_inicio_vigencia_soat || null,
-          fecha_vencimiento_vigencia_soat: resultado.fecha_vencimiento_vigencia_soat || null,
+          tipoIdentificacionPropietario: resultado.tipo_identificacion_propietario || null,
+          numeroIdentificacionPropietario: resultado.numero_identificacion_propietario || null,
+          nombreRazonSocialPropietario: resultado.nombre_razon_social_propietario || null,
+          fechaExpedicionTecno: resultado.fecha_expedicion_tecno || null,
+          fechaVigenciaTecno: resultado.fecha_vigencia_tecno || null,
+          fechaInicioVigenciaSoat: resultado.fecha_inicio_vigencia_soat || null,
+          fechaVencimientoVigenciaSoat: resultado.fecha_vencimiento_vigencia_soat || null,
           message: resultado.message || 'Scraping y guardado exitoso'
         }
       ]

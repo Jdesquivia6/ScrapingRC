@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const pool = require('../utils/db');
 const { scrapeLiquidacionTramite } = require('../scraping/liquidacionScraper');
 
 const DOWNLOAD_DIR = path.join(process.cwd(), 'downloads');
@@ -109,6 +110,49 @@ function parsePayload(body) {
   };
 }
 
+/**
+ * Asegura que la tabla historial_liquidaciones exista.
+ */
+let _tablaHistorialCreada = false;
+async function asegurarTablaHistorial() {
+  if (_tablaHistorialCreada) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS historial_liquidaciones (
+        id SERIAL PRIMARY KEY,
+        placa VARCHAR(20) NOT NULL,
+        tramites TEXT,
+        total_tramites INTEGER DEFAULT 0,
+        exitosa BOOLEAN DEFAULT true,
+        error TEXT,
+        fecha_consulta TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    _tablaHistorialCreada = true;
+  } catch (err) {
+    console.error('Error creando historial_liquidaciones:', err.message);
+  }
+}
+
+/**
+ * Guarda un registro en el historial de liquidaciones.
+ */
+async function guardarHistorialLiquidacion({ placa, tramites, exitosa, error }) {
+  try {
+    await asegurarTablaHistorial();
+    const tramitesStr = Array.isArray(tramites)
+      ? tramites.map(t => `${t.tramite || t}`).join(', ')
+      : String(tramites || '');
+    const total = Array.isArray(tramites) ? tramites.length : 0;
+    await pool.query(`
+      INSERT INTO historial_liquidaciones (placa, tramites, total_tramites, exitosa, error)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [placa, tramitesStr, total, exitosa, error || null]);
+  } catch (err) {
+    console.error('Error guardando historial liquidación:', err.message);
+  }
+}
+
 exports.consultarLiquidacion = async (req, res) => {
   try {
     if (!req.body || typeof req.body !== 'object') {
@@ -136,6 +180,14 @@ exports.consultarLiquidacion = async (req, res) => {
       });
     }
 
+    // Guardar en historial
+    guardarHistorialLiquidacion({
+      placa: parsed.data.placa,
+      tramites: parsed.data.tramites,
+      exitosa: resultado.ok,
+      error: resultado.ok ? null : (resultado.error || 'Error desconocido')
+    });
+
     return res.json({
       ok: true,
       data: {
@@ -152,6 +204,18 @@ exports.consultarLiquidacion = async (req, res) => {
       }
     });
   } catch (error) {
+    // Guardar en historial aunque haya error interno
+    if (req.body) {
+      const parsedError = parsePayload(req.body);
+      if (parsedError.ok) {
+        guardarHistorialLiquidacion({
+          placa: parsedError.data.placa,
+          tramites: parsedError.data.tramites,
+          exitosa: false,
+          error: error.message || 'Error interno del servidor'
+        });
+      }
+    }
     return res.status(500).json({
       ok: false,
       error: error.message || 'Error interno del servidor'
@@ -251,6 +315,16 @@ exports.consultarLiquidacionBatch = async (req, res) => {
           entrada: parsed.data
         });
       }
+    }
+
+    // Guardar en historial (cada item del batch)
+    for (const r of resultados) {
+      guardarHistorialLiquidacion({
+        placa: r.entrada?.placa || r.data?.placa || 'DESCONOCIDA',
+        tramites: r.entrada?.tramites || [],
+        exitosa: r.ok,
+        error: r.ok ? null : (r.error || 'Error desconocido')
+      });
     }
 
     return res.json({
