@@ -560,10 +560,7 @@ exports.tomarSiguienteJob = async (req, res) => {
         FROM worker_jobs j
         WHERE j.estado = 'pendiente'
           AND j.modulo = ANY($1::text[])
-          AND (
-            $2 = 'administrador'
-            OR j.fk_usuario = $3
-          )
+          AND j.fk_usuario = $2
         ORDER BY j.created_at ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
@@ -571,13 +568,12 @@ exports.tomarSiguienteJob = async (req, res) => {
       UPDATE worker_jobs j
       SET estado = 'procesando',
           started_at = COALESCE(j.started_at, NOW()),
-          worker_name = COALESCE($4, j.worker_name)
+          worker_name = COALESCE($3, j.worker_name)
       FROM candidate c
       WHERE j.id_job = c.id_job
       RETURNING j.*
     `, [
       modulosValidos,
-      req.user.rol,
       req.user.id_usuario,
       workerName
     ]);

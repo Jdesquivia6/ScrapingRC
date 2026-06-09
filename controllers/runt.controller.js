@@ -192,7 +192,8 @@ exports.listarPersonasPendientesDirecciones = async (req, res) => {
 
 exports.listarHistorialDirecciones = async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 100, 1000);
+    // Sin ?limit → sin límite. Con ?limit → respeta hasta 100000
+    const limit = req.query.limit ? Math.min(Number(req.query.limit), 100000) : null;
 
     const result = await pool.query(`
       SELECT DISTINCT ON (p.numero_documento)
@@ -219,8 +220,8 @@ exports.listarHistorialDirecciones = async (req, res) => {
         ON cp.id_consul_placa = p.fk_consul_placa
       WHERE p.direccion_consultada = TRUE
       ORDER BY p.numero_documento, COALESCE(p.fecha_consulta_direccion, p.fecha_actualizacion) DESC
-      LIMIT $1
-    `, [limit]);
+      ${limit !== null ? 'LIMIT $1' : ''}
+    `, limit !== null ? [limit] : []);
 
     return res.json({
       ok: true,

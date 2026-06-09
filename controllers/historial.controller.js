@@ -43,7 +43,7 @@ exports.listarHistorialUnificado = async (req, res) => {
       limite = 50
     } = req.query;
 
-    const limiteSeguro = Math.min(Number(limite) || 50, 500);
+    const limiteSeguro = Math.min(Number(limite) || 50, 100000);
     const paginaSegura = Math.max(1, Number(pagina) || 1);
     const offset = (paginaSegura - 1) * limiteSeguro;
 

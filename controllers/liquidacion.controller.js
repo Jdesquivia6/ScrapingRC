@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const pool = require('../utils/db');
 const { scrapeLiquidacionTramite } = require('../scraping/liquidacionScraper');
+const { obtenerEstadoSesionRunt } = require('../utils/runtSession');
 
 const DOWNLOAD_DIR = path.join(process.cwd(), 'downloads');
 
@@ -270,7 +271,7 @@ exports.consultarLiquidacionBatch = async (req, res) => {
       });
     }
 
-    const MAX_ITEMS = 10;
+    const MAX_ITEMS = 50;
     if (items.length > MAX_ITEMS) {
       return res.status(400).json({
         ok: false,
@@ -278,19 +279,65 @@ exports.consultarLiquidacionBatch = async (req, res) => {
       });
     }
 
-    const resultados = [];
+    // Verificar sesión RUNT antes de empezar
+    const session = await obtenerEstadoSesionRunt();
+    if (!session.puedeConsultar) {
+      return res.status(409).json({
+        ok: false,
+        error: session.activa
+          ? `Sesión RUNT por expirar. Solo quedan ${session.minutosRestantes} minutos.`
+          : 'La sesión RUNT está vencida. Debe iniciar sesión nuevamente.',
+        session
+      });
+    }
+
+    // Calcular tiempo estimado (~40s por placa con tramites incluidos)
+    const minutosEstimados = Math.ceil((items.length * 40) / 60);
+    if (minutosEstimados > session.minutosRestantes) {
+      return res.status(409).json({
+        ok: false,
+        error: `El batch de ${items.length} placas requiere ~${minutosEstimados} min, pero solo quedan ${session.minutosRestantes} min de sesión RUNT. Reduzca la cantidad de placas.`,
+        session,
+        maxRecomendado: Math.floor((session.minutosRestantes * 60) / 40)
+      });
+    }
+
+    // ── Streaming NDJSON: escribir cada resultado ni bien termina ──
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    let exitosos = 0;
+    let fallidos = 0;
+
+    // Enviar evento de inicio
+    res.write(JSON.stringify({
+      tipo: 'inicio',
+      total: items.length
+    }) + '\n');
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const parsed = parsePayload(item);
 
       if (!parsed.ok) {
-        resultados.push({
+        const errorResult = {
           index: i,
           ok: false,
           error: parsed.error,
-          entrada: item
+          entrada: item,
+          placa: item.placa || 'DESCONOCIDA',
+          tramites: item.tramites || []
+        };
+        fallidos++;
+        guardarHistorialLiquidacion({
+          placa: errorResult.placa,
+          tramites: errorResult.tramites,
+          exitosa: false,
+          error: parsed.error
         });
+        res.write(JSON.stringify({ tipo: 'resultado', ...errorResult }) + '\n');
         continue;
       }
 
@@ -300,44 +347,68 @@ exports.consultarLiquidacionBatch = async (req, res) => {
           tramites: parsed.data.tramites
         });
 
-        resultados.push({
+        const resultData = {
           index: i,
           ok: resultado.ok,
           data: resultado.ok ? resultado.data : null,
           error: resultado.ok ? null : resultado.error,
-          entrada: parsed.data
+          entrada: parsed.data,
+          placa: parsed.data.placa,
+          tramites: parsed.data.tramites
+        };
+
+        if (resultado.ok) exitosos++;
+        else fallidos++;
+
+        guardarHistorialLiquidacion({
+          placa: parsed.data.placa,
+          tramites: parsed.data.tramites,
+          exitosa: resultado.ok,
+          error: resultado.ok ? null : (resultado.error || 'Error desconocido')
         });
+
+        res.write(JSON.stringify({ tipo: 'resultado', ...resultData }) + '\n');
       } catch (error) {
-        resultados.push({
+        fallidos++;
+        guardarHistorialLiquidacion({
+          placa: parsed.data.placa,
+          tramites: parsed.data.tramites,
+          exitosa: false,
+          error: error.message || 'Error procesando item batch'
+        });
+        res.write(JSON.stringify({
+          tipo: 'resultado',
           index: i,
           ok: false,
           error: error.message || 'Error procesando item batch',
-          entrada: parsed.data
-        });
+          entrada: parsed.data,
+          placa: parsed.data.placa,
+          tramites: parsed.data.tramites
+        }) + '\n');
       }
     }
 
-    // Guardar en historial (cada item del batch)
-    for (const r of resultados) {
-      guardarHistorialLiquidacion({
-        placa: r.entrada?.placa || r.data?.placa || 'DESCONOCIDA',
-        tramites: r.entrada?.tramites || [],
-        exitosa: r.ok,
-        error: r.ok ? null : (r.error || 'Error desconocido')
+    // Enviar evento de finalización
+    res.write(JSON.stringify({
+      tipo: 'completo',
+      total: items.length,
+      exitosos,
+      fallidos
+    }) + '\n');
+    res.end();
+  } catch (error) {
+    // Si ocurre un error antes de empezar el streaming
+    if (!res.headersSent) {
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Error interno del servidor'
       });
     }
-
-    return res.json({
-      ok: true,
-      total: resultados.length,
-      exitosos: resultados.filter(r => r.ok).length,
-      fallidos: resultados.filter(r => !r.ok).length,
-      data: resultados
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
+    // Si ya empezó el streaming, escribir el error como NDJSON
+    res.write(JSON.stringify({
+      tipo: 'error',
       error: error.message || 'Error interno del servidor'
-    });
+    }) + '\n');
+    res.end();
   }
 };

@@ -426,29 +426,13 @@ async function seleccionarClasificacion(page, clasificacion) {
 async function resolverTarifa(page, tramite, clasificacion) {
   const clasifNormalizada = normalizarMayus(clasificacion);
 
-  // ── Caso MEDIDAS CAUTELARES: SweetAlert ──
+  // ── Caso MEDIDAS CAUTELARES: tarifa auto-seleccionada ──
   if (clasifNormalizada === 'MEDIDAS CAUTELARES') {
-    // Esperar primero que Angular procese el cambio de clasificación
-    await pausa(page, 2000, 3500);
-
-    // Primer intento de SweetAlert
-    let manejado = await manejarSweetAlert(page, 'Continuar', 12000);
-
-    // Segundo intento si falló (puede que SweetAlert tarde en aparecer)
-    if (!manejado) {
-      console.log('[scraper] Reintentando SweetAlert (MEDIDAS CAUTELARES)...');
-      await pausa(page, 1500, 3000);
-      manejado = await manejarSweetAlert(page, 'Continuar', 12000);
-    }
-
-    if (manejado) {
-      console.log('[scraper] SweetAlert MEDIDAS CAUTELARES manejado');
-      return { tipo: 'sweetalert', tarifa: null, descripcion: 'Sin tarifa (continuar SweetAlert)' };
-    }
-
-    // Si SweetAlert no apareció, la tarifa puede no ser necesaria
-    console.log('[scraper] No se detectó SweetAlert, continuando sin tarifa');
-    return { tipo: 'ninguna', tarifa: null, descripcion: 'Sin tarifa (SweetAlert no detectado)' };
+    // No hay SweetAlert — la tarifa se coloca automáticamente abajo al seleccionar la clasificación.
+    // Solo esperamos que Angular procese y seguimos para que Generar funcione.
+    console.log('[scraper] MEDIDAS CAUTELARES: tarifa automática, sin SweetAlert');
+    await pausa(page, 3000, 5000);
+    return { tipo: 'auto', tarifa: null, descripcion: 'Tarifa automática MEDIDAS CAUTELARES' };
   }
 
   // ── Para otras clasificaciones: esperar a que Angular procese ──
@@ -732,10 +716,19 @@ async function scrapeLiquidacionTramite({
       await pausa(page, 900, 1800);
     }
 
-    // ── 5) Leer tabla de trámites ──
+    // ── 5) Leer tabla de trámites (con retry para MEDIDAS CAUTELARES) ──
     await pausa(page, 1200, 2000);
-    const tramitesTabla = await leerTablaTramites(page);
+    let tramitesTabla = await leerTablaTramites(page);
     console.log('[scraper] Tabla filas:', tramitesTabla.length);
+
+    // Si la tabla está vacía y es MEDIDAS CAUTELARES, esperar más (Angular tarda en auto-colocar tarifa)
+    if (tramitesTabla.length === 0 && primeraClasificacion && primeraClasificacion.includes('MEDIDAS CAUTELARES')) {
+      console.log('[scraper] Tabla vacía con MEDIDAS CAUTELARES — esperando más tiempo para que Angular procese...');
+      await pausa(page, 4000, 6000);
+      tramitesTabla = await leerTablaTramites(page);
+      console.log('[scraper] Tabla filas (retry):', tramitesTabla.length);
+    }
+
     validarTramitesLiquidables(tramitesTabla);
 
     // ── 6) Generar y capturar PDF por API ──
