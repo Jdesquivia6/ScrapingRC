@@ -1,7 +1,7 @@
 const pool = require('../utils/db');
 const ExcelJS = require('exceljs');
 
-function construirFiltroFechas({ fechaInicio, fechaFin, alias = 'cp', campo = 'fecha_registro' }) {
+function construirFiltroFechas({ fechaInicio, fechaFin, alias = 'cp', campo = 'fecha_consulta' }) {
   const params = [];
   let where = '';
 
@@ -24,7 +24,7 @@ exports.obtenerDashboard = async (req, res) => {
       fechaInicio,
       fechaFin,
       alias: 'cp',
-      campo: 'fecha_registro'
+      campo: 'fecha_consulta'
     });
 
     const resumen = await pool.query(`
@@ -43,7 +43,7 @@ exports.obtenerDashboard = async (req, res) => {
 
     const porDia = await pool.query(`
       SELECT
-        cp.fecha_registro::date AS fecha,
+        cp.fecha_consulta::date AS fecha,
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE cp.estado_consulta = true)::int AS exitosas,
         COUNT(*) FILTER (WHERE cp.estado_consulta IS NULL OR cp.estado_consulta = false)::int AS pendientes,
@@ -53,7 +53,7 @@ exports.obtenerDashboard = async (req, res) => {
       LEFT JOIN runt_datos_vehiculos rdv
         ON rdv.fk_consul_placa = cp.id_consul_placa
       ${filtro.where}
-      GROUP BY cp.fecha_registro::date
+      GROUP BY cp.fecha_consulta::date
       ORDER BY fecha ASC
     `, filtro.params);
 
@@ -61,7 +61,6 @@ exports.obtenerDashboard = async (req, res) => {
       SELECT
         cp.placa,
         cp.estado_consulta,
-        cp.fecha_registro,
         cp.fecha_consulta,
         rdv.estado_consulta AS estado_datos_vehiculo,
         rdv.error_consulta,
@@ -70,7 +69,7 @@ exports.obtenerDashboard = async (req, res) => {
       LEFT JOIN runt_datos_vehiculos rdv
         ON rdv.fk_consul_placa = cp.id_consul_placa
       ${filtro.where}
-      ORDER BY COALESCE(rdv.fecha_consulta, cp.fecha_consulta, cp.fecha_registro) DESC
+      ORDER BY COALESCE(rdv.fecha_consulta, cp.fecha_consulta) DESC
       LIMIT 20
     `, filtro.params);
 
@@ -117,14 +116,13 @@ exports.exportarDashboardExcel = async (req, res) => {
       fechaInicio,
       fechaFin,
       alias: 'cp',
-      campo: 'fecha_registro'
+      campo: 'fecha_consulta'
     });
 
     const result = await pool.query(`
       SELECT
         cp.placa,
         cp.estado_consulta AS consulta_placa_exitosa,
-        cp.fecha_registro,
         cp.fecha_consulta AS fecha_consulta_placa,
 
         rstp.tipo_identificacion_propietario,
@@ -150,7 +148,7 @@ exports.exportarDashboardExcel = async (req, res) => {
       LEFT JOIN runt_datos_vehiculos rdv
         ON rdv.fk_consul_placa = cp.id_consul_placa
       ${filtro.where}
-      ORDER BY COALESCE(rdv.fecha_consulta, rstp.fecha_consulta, cp.fecha_consulta, cp.fecha_registro) DESC
+      ORDER BY COALESCE(rdv.fecha_consulta, rstp.fecha_consulta, cp.fecha_consulta) DESC
     `, filtro.params);
 
     const workbook = new ExcelJS.Workbook();
@@ -159,7 +157,6 @@ exports.exportarDashboardExcel = async (req, res) => {
     sheet.columns = [
       { header: 'Placa', key: 'placa', width: 15 },
       { header: 'Consulta placa exitosa', key: 'consulta_placa_exitosa', width: 25 },
-      { header: 'Fecha registro', key: 'fecha_registro', width: 25 },
       { header: 'Fecha consulta placa', key: 'fecha_consulta_placa', width: 25 },
       { header: 'Tipo ID propietario', key: 'tipo_identificacion_propietario', width: 25 },
       { header: 'Número ID propietario', key: 'numero_identificacion_propietario', width: 25 },

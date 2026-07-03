@@ -1,5 +1,9 @@
 const pool = require('../utils/db');
+const axios = require('axios');
 const { obtenerEstadoSesionRunt } = require('../utils/runtSession');
+const { API_HIKVISION } = require('../config');
+
+const EXTERNAL_API_PERSONAS = `http://${API_HIKVISION}:5051/v1/rest/api/personas/enriquecer`;
 
 const JOB_STATES = new Set([
   'pendiente',
@@ -1112,7 +1116,7 @@ exports.guardarResultadoScraping = async (req, res) => {
     else if (modulo === 'personas-direcciones') {
       const tipoDoc = resultado.tipoDocumento || '';
       const numDoc = resultado.numeroDocumento || '';
-      
+
       if (resultado.ok && resultado.direcciones?.length > 0) {
         const primeraDir = resultado.direcciones[0] || {};
 
@@ -1195,6 +1199,72 @@ exports.guardarResultadoScraping = async (req, res) => {
         if (updatePersona.rowCount === 0) {
           throw new Error(`No existe persona_natural_propietario para documento ${numDoc}`);
         }
+
+        // 3) Obtener placa relacionada via JOIN y enviar al microservicio externo
+        try {
+          const personaConPlaca = await client.query(`
+            SELECT
+              p.id_per_natural_dir,
+              p.numero_documento,
+              cp.placa
+            FROM persona_natural_propietario p
+            LEFT JOIN consultas_placas cp ON cp.id_consul_placa = p.fk_consul_placa
+            WHERE p.numero_documento = $1
+            LIMIT 1
+          `, [numDoc]);
+
+          const placa = personaConPlaca.rows[0]?.placa || null;
+
+          if (!placa) {
+            console.log(`[personas] Sin placa relacionada para ${numDoc} — saltando envío externo`);
+          } else {
+            console.log(`[personas] Placa relacionada: ${placa} para ${numDoc} — enviando a externo`);
+
+            const body = {
+              tipoDocumento: tipoDoc,
+              numeroDocumento: numDoc,
+              nombres: nombres || null,
+              apellidos: apellidos || null,
+              direccion: direccion || null,
+              municipioDepartamento: municipio || null,
+              telefono: telefono || null,
+              correo: correo || null,
+              placa: placa
+            };
+
+            await axios.post(EXTERNAL_API_PERSONAS, body, {
+              headers: { 'Content-Type': 'application/json' },
+              timeout: 15000
+            });
+
+            console.log(`[personas] Enviado exitosamente al externo: ${numDoc} placa ${placa}`);
+
+            // 4) Marcar como enviado exitoso
+            await client.query(`
+              UPDATE persona_natural_propietario
+              SET
+                enviado_externo = TRUE,
+                fecha_envio_externo = NOW(),
+                error_envio_externo = NULL
+              WHERE numero_documento = $1
+            `, [numDoc]);
+
+            console.log(`[personas] Marcado como enviado_externo=TRUE para ${numDoc}`);
+          }
+        } catch (err) {
+          // 5) Si falla, incrementar intentos y registrar error
+          console.warn(`[personas] Error enviando al externo para ${numDoc}: ${err.message}`);
+
+          await client.query(`
+            UPDATE persona_natural_propietario
+            SET
+              intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1,
+              error_envio_externo = $2
+            WHERE numero_documento = $1
+          `, [numDoc, err.message]);
+
+          console.log(`[personas] Intentos incremented for ${numDoc} — error: ${err.message}`);
+        }
       }
     }
 
@@ -1207,6 +1277,113 @@ exports.guardarResultadoScraping = async (req, res) => {
 
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+};
+
+// ============================================================
+// REINTENTO: Enviar registros pendientes de personas al externo
+// ============================================================
+
+exports.reintentarEnviosPersonasPendientes = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    // 1) Obtener registros pendientes (no enviados, intentos < 3, con placa)
+    const pendientes = await client.query(`
+      SELECT
+        p.id_per_natural_dir,
+        p.numero_documento,
+        p.tipo_documento,
+        p.nombres,
+        p.apellidos,
+        p.celular,
+        p.correo,
+        p.fk_direcciones,
+        d.direccion,
+        d.municio_departamento,
+        d.telefono,
+        d.tipo_direccion,
+        cp.placa
+      FROM persona_natural_propietario p
+      LEFT JOIN consultas_placas cp ON cp.id_consul_placa = p.fk_consul_placa
+      LEFT JOIN direcciones d ON d.id_direcciones = p.fk_direcciones
+      WHERE p.enviado_externo = FALSE
+        AND p.intentos_envio_externo < 3
+        AND cp.placa IS NOT NULL
+        AND cp.placa != ''
+      ORDER BY p.fecha_consulta_direccion ASC
+      LIMIT 100
+    `);
+
+    const registros = registros.rows;
+    let exitosos = 0;
+    let fallidos = 0;
+    const errores = [];
+
+    for (const reg of registros) {
+      try {
+        const body = {
+          tipoDocumento: reg.tipo_documento || null,
+          numeroDocumento: reg.numero_documento || null,
+          nombres: reg.nombres || null,
+          apellidos: reg.apellidos || null,
+          direccion: reg.direccion || null,
+          municipioDepartamento: reg.municio_departamento || null,
+          telefono: reg.telefono || reg.celular || null,
+          correo: reg.correo || null,
+          placa: reg.placa || null
+        };
+
+        await axios.post(EXTERNAL_API_PERSONAS, body, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 15000
+        });
+
+        // Éxito — marcar como enviado
+        await client.query(`
+          UPDATE persona_natural_propietario
+          SET
+            enviado_externo = TRUE,
+            fecha_envio_externo = NOW(),
+            error_envio_externo = NULL
+          WHERE id_per_natural_dir = $1
+        `, [reg.id_per_natural_dir]);
+
+        console.log(`[personas-reintento] Enviado: ${reg.numero_documento} placa ${reg.placa}`);
+        exitosos++;
+
+      } catch (err) {
+        // Fallo — incrementar intentos
+        await client.query(`
+          UPDATE persona_natural_propietario
+          SET
+            intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1,
+            error_envio_externo = $2
+          WHERE id_per_natural_dir = $1
+        `, [reg.id_per_natural_dir, err.message]);
+
+        console.warn(`[personas-reintento] Error con ${reg.numero_documento}: ${err.message}`);
+        errores.push({ numeroDocumento: reg.numero_documento, error: err.message });
+        fallidos++;
+      }
+    }
+
+    return res.json({
+      ok: true,
+      total: registros.length,
+      exitosos,
+      fallidos,
+      restantes: pendientes.rowCount - exitosos - fallidos,
+      errores
+    });
+
+  } catch (error) {
     return res.status(500).json({
       ok: false,
       error: error.message

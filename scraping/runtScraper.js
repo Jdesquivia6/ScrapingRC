@@ -757,10 +757,7 @@ exports.scrapeDireccionesPN = async ({
     });
 
     // NO guardar aquí - el worker centraliza el guardado en DB via guardar-resultado
-    // const dbResult = await guardarDireccionPersona({
-    //   numeroDocumento: documento,
-    //   rawData
-    // });
+    // El guardado en DB se hace en el worker via guardarResultadoScraping
 
     return {
       ok: true,

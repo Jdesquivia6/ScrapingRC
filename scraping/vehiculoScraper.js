@@ -1,9 +1,9 @@
 const axios = require('axios');
 const { connectToChrome } = require('./connectToChrome');
 const pool = require('../utils/db');
+const { API_HIKVISION } = require('../config');
 
-// Host del servicio externo de fotodetecciones (LOCAL para pruebas)
-const API_HIKVISION = '10.10.20.108';
+// Host del servicio externo de fotodetecciones
 const EXTERNAL_API_URL = `http://${API_HIKVISION}:5051/v1/rest/api/vehiculo-scrapping/guardar`;
 
 const URL = 'https://runtpro.runt.gov.co/#/rnfgestionsolicitud/consultar-vehiculo';
