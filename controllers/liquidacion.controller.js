@@ -3,6 +3,8 @@ const fs = require('fs');
 const pool = require('../utils/db');
 const { scrapeLiquidacionTramite } = require('../scraping/liquidacionScraper');
 const { obtenerEstadoSesionRunt } = require('../utils/runtSession');
+const { obtenerConfigImpresora } = require('./configController');
+const pdf_to_printer = require('pdf-to-printer');
 
 const DOWNLOAD_DIR = path.join(process.cwd(), 'downloads');
 
@@ -410,5 +412,62 @@ exports.consultarLiquidacionBatch = async (req, res) => {
       error: error.message || 'Error interno del servidor'
     }) + '\n');
     res.end();
+  }
+};
+
+/**
+ * Imprime una lista de PDFs de liquidacion.
+ * POST /api/liquidacion/imprimir-pdfs
+ * Body: { fileNames: string[] }
+ */
+exports.imprimirPdfs = async (req, res) => {
+  try {
+    const { fileNames } = req.body;
+
+    if (!fileNames || !Array.isArray(fileNames) || fileNames.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Debe enviar un array fileNames' });
+    }
+
+    const config = await obtenerConfigImpresora();
+    const printerOptions = config.printer_name
+      ? { printer: config.printer_name }
+      : {};
+
+    let exitosas = 0;
+    let fallidas = 0;
+    const errores = [];
+
+    for (const fileName of fileNames) {
+      const safeName = path.basename(fileName);
+      const filePath = path.join(DOWNLOAD_DIR, safeName);
+
+      if (!fs.existsSync(filePath)) {
+        fallidas++;
+        errores.push(`No encontrado: ${safeName}`);
+        continue;
+      }
+
+      try {
+        await pdf_to_printer.printPDF(filePath, printerOptions);
+        exitosas++;
+        console.log(`[print] Impreso: ${safeName} ${config.printer_name ? `(impresora: ${config.printer_name})` : '(predeterminada)'}`);
+      } catch (printErr) {
+        fallidas++;
+        errores.push(`${safeName}: ${printErr.message}`);
+        console.error(`[print] Error imprimiendo ${safeName}:`, printErr.message);
+      }
+    }
+
+    res.json({
+      ok: true,
+      data: {
+        total: fileNames.length,
+        exitosas,
+        fallidas,
+        errores
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 };

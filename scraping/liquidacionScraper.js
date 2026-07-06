@@ -313,18 +313,51 @@ async function diligenciarFecha(page, fecha) {
     'input[type="date"]'
   ];
 
+  // Convertir YYYY-MM-DD a DD/MM/AAAA para el datepicker de Angular
+  const partesFecha = fecha.split('-');
+  const fechaFormateada = `${partesFecha[2]}/${partesFecha[1]}/${partesFecha[0]}`;
+
   for (const selector of selectores) {
     const input = page.locator(selector).first();
     const existe = await input.count();
-    if (existe) {
-      await input.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-      if (await input.isVisible().catch(() => false)) {
-        await input.fill('');
-        await input.fill(fecha);
+    if (!existe) continue;
+
+    await input.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+    const visible = await input.isVisible().catch(() => false);
+    if (!visible) continue;
+
+    const isReadonly = await input.getAttribute('readonly').catch(() => null);
+
+    if (isReadonly === 'true' || isReadonly === '') {
+      // Campo readonly → abrir datepicker con click y escribir en el popup
+      await input.click();
+      await pausa(page, 500, 1000);
+
+      // Buscar el input del datepicker popup que suele aparecer
+      const popupInput = page.locator('mat-datepicker-content input, .mat-datepicker-content input').first();
+      try {
+        await popupInput.waitFor({ state: 'visible', timeout: 8000 });
+        await popupInput.fill('');
+        await popupInput.type(fechaFormateada, { delay: 50 });
         await pausa(page, 300, 600);
-        console.log(`[scraper] Fecha liquidación OK: ${fecha} (selector: ${selector})`);
+        // Cerrar el popup con Tab o click fuera
+        await input.press('Tab');
+        await pausa(page, 400, 800);
+        console.log(`[scraper] Fecha liquidación OK (readonly): ${fechaFormateada} (selector: ${selector})`);
+        return;
+      } catch {
+        // Si no aparece el popup, intentar hacer click fuera para cerrar
+        await page.mouse.click(10, 10);
+        console.log(`[scraper] Fecha liquidación: popup no apareció, saltando (selector: ${selector})`);
         return;
       }
+    } else {
+      // Campo editable → usar fill directo
+      await input.fill('');
+      await input.fill(fechaFormateada);
+      await pausa(page, 300, 600);
+      console.log(`[scraper] Fecha liquidación OK: ${fechaFormateada} (selector: ${selector})`);
+      return;
     }
   }
   console.log('[scraper] No se encontró campo de fecha en el formulario RUNT');

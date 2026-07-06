@@ -30,7 +30,8 @@ const MODULES = new Set([
   'datos-vehiculo',
   'personas-direcciones',
   'liquidaciones',
-  'liquidacion'
+  'liquidacion',
+  'ubicabilidad-personas'
 ]);
 
 function sanitizeEstado(estado, allowedSet) {
@@ -1264,6 +1265,163 @@ exports.guardarResultadoScraping = async (req, res) => {
           `, [numDoc, err.message]);
 
           console.log(`[personas] Intentos incremented for ${numDoc} — error: ${err.message}`);
+        }
+      }
+    }
+
+    // ================================================
+    // UBICABILIDAD-PERSONAS: Crear/actualizar persona + direcciones
+    // ================================================
+    else if (modulo === 'ubicabilidad-personas') {
+      const tipoDoc = resultado.tipoDocumento || '';
+      const numDoc = resultado.numeroDocumento || '';
+
+      if (resultado.ok && resultado.direcciones?.length > 0) {
+        const primeraDir = resultado.direcciones[0] || {};
+
+        const nombres = [primeraDir.primerNombre, primeraDir.segundoNombre]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        const apellidos = [primeraDir.primerApellido, primeraDir.segundoApellido]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+
+        const direccion = primeraDir.direccion || null;
+        const municipio = primeraDir.municipio || primeraDir.municipioDepartamento || primeraDir.municio_departamento || null;
+        const telefono = primeraDir.telefono || primeraDir.celular || null;
+        const tipoDireccion = primeraDir.tipoDireccion || primeraDir.tipo_direccion || null;
+        const correo = primeraDir.correoElectronico || primeraDir.correo || null;
+
+        // 1) Buscar o crear dirección
+        let idDireccion = null;
+        if (direccion) {
+          const dirExistente = await client.query(`
+            SELECT id_direcciones
+            FROM direcciones
+            WHERE direccion = $1
+              AND COALESCE(municio_departamento, '') = COALESCE($2, '')
+              AND COALESCE(telefono, '') = COALESCE($3, '')
+              AND COALESCE(tipo_direccion, '') = COALESCE($4, '')
+            LIMIT 1
+          `, [direccion, municipio, telefono, tipoDireccion]);
+
+          if (dirExistente.rows.length > 0) {
+            idDireccion = dirExistente.rows[0].id_direcciones;
+          } else {
+            const insertedDir = await client.query(`
+              INSERT INTO direcciones (
+                direccion, municio_departamento, telefono,
+                tipo_direccion, estado_direccion, dato_migrado, fecha_actualizacion
+              ) VALUES ($1,$2,$3,$4,$5,$6,NOW())
+              RETURNING id_direcciones
+            `, [direccion, municipio, telefono, tipoDireccion, true, primeraDir.direccionMigrada || null]);
+            idDireccion = insertedDir.rows[0]?.id_direcciones || null;
+          }
+        }
+
+        // 2) Crear o actualizar persona con origen CARGADO_POR_EXCEL
+        const existePersona = await client.query(
+          'SELECT id_per_natural_dir FROM persona_natural_propietario WHERE numero_documento = $1',
+          [numDoc]
+        );
+
+        if (existePersona.rows.length > 0) {
+          await client.query(`
+            UPDATE persona_natural_propietario SET
+              tipo_documento = COALESCE(NULLIF(tipo_documento, ''), $2),
+              nombres = COALESCE(NULLIF(nombres, ''), $3),
+              apellidos = COALESCE(NULLIF(apellidos, ''), $4),
+              celular = COALESCE(NULLIF(celular, ''), $5),
+              correo = COALESCE(NULLIF(correo, ''), $6),
+              fk_direcciones = COALESCE($7, fk_direcciones),
+              direccion_consultada = TRUE,
+              direccion_encontrada = TRUE,
+              error_consulta_direccion = NULL,
+              fecha_consulta_direccion = NOW(),
+              fecha_actualizacion = NOW(),
+              origen_registro = 'CARGADO_POR_EXCEL'
+            WHERE numero_documento = $1
+          `, [numDoc, tipoDoc, nombres || null, apellidos || null, telefono, correo, idDireccion]);
+        } else {
+          await client.query(`
+            INSERT INTO persona_natural_propietario (
+              tipo_documento, numero_documento, nombres, apellidos,
+              celular, correo, fk_direcciones,
+              direccion_consultada, direccion_encontrada,
+              error_consulta_direccion, fecha_consulta_direccion,
+              origen_registro
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,TRUE,NULL,NOW(),'CARGADO_POR_EXCEL')
+          `, [
+            tipoDoc || 'Cédula Ciudadanía',
+            numDoc,
+            nombres || null,
+            apellidos || null,
+            telefono,
+            correo,
+            idDireccion
+          ]);
+        }
+
+        // 3) Enviar al microservicio externo
+        try {
+          const body = {
+            tipoDocumento: tipoDoc,
+            numeroDocumento: numDoc,
+            nombres: nombres || null,
+            apellidos: apellidos || null,
+            direccion: direccion || null,
+            municipioDepartamento: municipio || null,
+            telefono: telefono || null,
+            correo: correo || null,
+            placa: null
+          };
+
+          await axios.post(EXTERNAL_API_PERSONAS, body, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 15000
+          });
+
+          await client.query(`
+            UPDATE persona_natural_propietario
+            SET enviado_externo = TRUE, fecha_envio_externo = NOW(), error_envio_externo = NULL
+            WHERE numero_documento = $1
+          `, [numDoc]);
+        } catch (err) {
+          await client.query(`
+            UPDATE persona_natural_propietario
+            SET intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1, error_envio_externo = $2
+            WHERE numero_documento = $1
+          `, [numDoc, err.message]);
+        }
+      } else {
+        // Sin direcciones o error — crear/actualizar con error
+        const existePersona = await client.query(
+          'SELECT id_per_natural_dir FROM persona_natural_propietario WHERE numero_documento = $1',
+          [numDoc]
+        );
+
+        if (existePersona.rows.length > 0) {
+          await client.query(`
+            UPDATE persona_natural_propietario SET
+              tipo_documento = COALESCE(NULLIF(tipo_documento, ''), $2),
+              direccion_consultada = TRUE,
+              direccion_encontrada = FALSE,
+              error_consulta_direccion = $3,
+              fecha_consulta_direccion = NOW(),
+              origen_registro = 'CARGADO_POR_EXCEL'
+            WHERE numero_documento = $1
+          `, [numDoc, tipoDoc, resultado.error || 'No se encontraron direcciones']);
+        } else {
+          await client.query(`
+            INSERT INTO persona_natural_propietario (
+              tipo_documento, numero_documento,
+              direccion_consultada, direccion_encontrada,
+              error_consulta_direccion, fecha_consulta_direccion,
+              origen_registro
+            ) VALUES ($1,$2,TRUE,FALSE,$3,NOW(),'CARGADO_POR_EXCEL')
+          `, [tipoDoc || 'Cédula Ciudadanía', numDoc, resultado.error || 'No se encontraron direcciones']);
         }
       }
     }
