@@ -1,63 +1,73 @@
 const pool = require('../utils/db');
 const ExcelJS = require('exceljs');
 
-function construirFiltroFechas({ fechaInicio, fechaFin, alias = 'cp', campo = 'fecha_consulta' }) {
-  const params = [];
-  let where = '';
-
-  if (fechaInicio && fechaFin) {
-    where = `WHERE ${alias}.${campo}::date BETWEEN $1 AND $2`;
-    params.push(fechaInicio, fechaFin);
-  } else {
-    // Por defecto: últimos 30 días
-    where = `WHERE ${alias}.${campo} >= NOW() - INTERVAL '30 days'`;
-  }
-
-  return { where, params };
-}
-
 exports.obtenerDashboard = async (req, res) => {
   try {
     const { fechaInicio, fechaFin } = req.query;
+    const tieneFiltro = fechaInicio && fechaFin;
 
-    const filtro = construirFiltroFechas({
-      fechaInicio,
-      fechaFin,
-      alias: 'cp',
-      campo: 'fecha_consulta'
-    });
+    let params = [];
+    let filtroFecha = "";
+    if (tieneFiltro) {
+      filtroFecha = "WHERE cp.fecha_consulta::date BETWEEN $1 AND $2";
+      params = [fechaInicio, fechaFin];
+    }
 
-    const resumen = await pool.query(`
+    let filtroFechaVehiculos = "";
+    let paramsVehiculos = [];
+    if (tieneFiltro) {
+      filtroFechaVehiculos = "WHERE rdv.fecha_consulta::date BETWEEN $1 AND $2";
+      paramsVehiculos = [fechaInicio, fechaFin];
+    }
+
+    let filtroFechaUbica = "";
+    let paramsUbica = [];
+    if (tieneFiltro) {
+      filtroFechaUbica = "WHERE pnp.fecha_consulta_direccion::date BETWEEN $1 AND $2";
+      paramsUbica = [fechaInicio, fechaFin];
+    }
+
+    // ── 1. RESUMEN PLACAS ─────────────────────────────────────────────────
+    const resumenPlacas = await pool.query(`
       SELECT
         COUNT(*)::int AS total_placas,
         COUNT(*) FILTER (WHERE cp.estado_consulta = true)::int AS consultas_exitosas,
-        COUNT(*) FILTER (WHERE cp.estado_consulta IS NULL OR cp.estado_consulta = false)::int AS pendientes,
-        COUNT(rdv.*)::int AS datos_vehiculo_total,
-        COUNT(rdv.*) FILTER (WHERE rdv.estado_consulta = true)::int AS datos_vehiculo_exitosos,
-        COUNT(rdv.*) FILTER (WHERE rdv.estado_consulta = false)::int AS datos_vehiculo_fallidos
+        COUNT(*) FILTER (WHERE cp.estado_consulta IS NULL OR cp.estado_consulta = false)::int AS pendientes
       FROM consultas_placas cp
-      LEFT JOIN runt_datos_vehiculos rdv
-        ON rdv.fk_consul_placa = cp.id_consul_placa
-      ${filtro.where}
-    `, filtro.params);
+      ${filtroFecha}
+    `, params);
 
-    const porDia = await pool.query(`
+    // ── 2. RESUMEN VEHÍCULOS ───────────────────────────────────────────────
+    const resumenVehiculos = await pool.query(`
       SELECT
-        cp.fecha_consulta::date AS fecha,
-        COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE cp.estado_consulta = true)::int AS exitosas,
-        COUNT(*) FILTER (WHERE cp.estado_consulta IS NULL OR cp.estado_consulta = false)::int AS pendientes,
-        COUNT(rdv.*) FILTER (WHERE rdv.estado_consulta = true)::int AS datos_vehiculo_exitosos,
-        COUNT(rdv.*) FILTER (WHERE rdv.estado_consulta = false)::int AS datos_vehiculo_fallidos
-      FROM consultas_placas cp
-      LEFT JOIN runt_datos_vehiculos rdv
-        ON rdv.fk_consul_placa = cp.id_consul_placa
-      ${filtro.where}
-      GROUP BY cp.fecha_consulta::date
-      ORDER BY fecha ASC
-    `, filtro.params);
+        COUNT(*)::int AS datos_vehiculo_total,
+        COUNT(*) FILTER (WHERE rdv.estado_consulta = true)::int AS datos_vehiculo_exitosos,
+        COUNT(*) FILTER (WHERE rdv.estado_consulta = false)::int AS datos_vehiculo_fallidos
+      FROM runt_datos_vehiculos rdv
+      ${filtroFechaVehiculos}
+    `, paramsVehiculos);
 
-    const ultimas = await pool.query(`
+    // ── 3. RESUMEN UBICABILIDAD PERSONAS ──────────────────────────────────
+    const resumenUbica = await pool.query(`
+      SELECT
+        COUNT(*)::int AS total_ubicabilidad,
+        COUNT(*) FILTER (WHERE pnp.direccion_encontrada = true)::int AS ubica_encontradas,
+        COUNT(*) FILTER (WHERE pnp.direccion_consultada = true AND pnp.direccion_encontrada = false)::int AS ubica_no_encontradas,
+        COUNT(*) FILTER (WHERE pnp.direccion_consultada = false OR pnp.direccion_consultada IS NULL)::int AS ubica_pendientes
+      FROM persona_natural_propietario pnp
+      WHERE pnp.origen_registro = 'CARGADO_POR_EXCEL'
+      ${filtroFechaUbica}
+    `, paramsUbica);
+
+    // ── 4. ÚLTIMAS CONSULTAS PLACA ────────────────────────────────────────
+    let ultimasParams = [];
+    let ultimasWhere = "";
+    if (tieneFiltro) {
+      ultimasWhere = "WHERE cp.fecha_consulta::date BETWEEN $1 AND $2";
+      ultimasParams = [fechaInicio, fechaFin];
+    }
+
+    const ultimasPlacas = await pool.query(`
       SELECT
         cp.placa,
         cp.estado_consulta,
@@ -66,12 +76,19 @@ exports.obtenerDashboard = async (req, res) => {
         rdv.error_consulta,
         rdv.fecha_consulta AS fecha_consulta_datos_vehiculo
       FROM consultas_placas cp
-      LEFT JOIN runt_datos_vehiculos rdv
-        ON rdv.fk_consul_placa = cp.id_consul_placa
-      ${filtro.where}
+      LEFT JOIN runt_datos_vehiculos rdv ON rdv.fk_consul_placa = cp.id_consul_placa
+      ${ultimasWhere}
       ORDER BY COALESCE(rdv.fecha_consulta, cp.fecha_consulta) DESC
       LIMIT 20
-    `, filtro.params);
+    `, ultimasParams);
+
+    // ── 5. ÚLTIMOS ERRORES ────────────────────────────────────────────────
+    let erroresParams = [];
+    let erroresWhere = "rdv.estado_consulta = false AND rdv.error_consulta IS NOT NULL";
+    if (tieneFiltro) {
+      erroresWhere += " AND rdv.fecha_consulta::date BETWEEN $1 AND $2";
+      erroresParams = [fechaInicio, fechaFin];
+    }
 
     const errores = await pool.query(`
       SELECT
@@ -79,32 +96,42 @@ exports.obtenerDashboard = async (req, res) => {
         rdv.error_consulta,
         rdv.fecha_consulta
       FROM runt_datos_vehiculos rdv
-      INNER JOIN consultas_placas cp
-        ON cp.id_consul_placa = rdv.fk_consul_placa
-      WHERE rdv.estado_consulta = false
-        AND rdv.error_consulta IS NOT NULL
+      INNER JOIN consultas_placas cp ON cp.id_consul_placa = rdv.fk_consul_placa
+      WHERE ${erroresWhere}
       ORDER BY rdv.fecha_consulta DESC
       LIMIT 20
-    `);
+    `, erroresParams);
+
+    // Combinar
+    const rPlacas = resumenPlacas.rows[0] || {};
+    const rVehiculos = resumenVehiculos.rows[0] || {};
+    const rUbica = resumenUbica.rows[0] || {};
 
     return res.json({
       ok: true,
       filtros: {
         fechaInicio: fechaInicio || null,
         fechaFin: fechaFin || null,
-        modo: fechaInicio && fechaFin ? 'rango' : 'ultimos_30_dias'
+        modo: tieneFiltro ? 'rango' : 'todo'
       },
-      resumen: resumen.rows[0],
-      porDia: porDia.rows,
-      ultimas: ultimas.rows,
+      resumen: {
+        total_placas: rPlacas.total_placas || 0,
+        consultas_exitosas: rPlacas.consultas_exitosas || 0,
+        pendientes_placas: rPlacas.pendientes || 0,
+        datos_vehiculo_total: rVehiculos.datos_vehiculo_total || 0,
+        datos_vehiculo_exitosos: rVehiculos.datos_vehiculo_exitosos || 0,
+        datos_vehiculo_fallidos: rVehiculos.datos_vehiculo_fallidos || 0,
+        total_ubicabilidad: rUbica.total_ubicabilidad || 0,
+        ubica_encontradas: rUbica.ubica_encontradas || 0,
+        ubica_no_encontradas: rUbica.ubica_no_encontradas || 0,
+        ubica_pendientes: rUbica.ubica_pendientes || 0
+      },
+      ultimasPlacas: ultimasPlacas.rows,
       errores: errores.rows
     });
 
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
+    return res.status(500).json({ ok: false, error: error.message });
   }
 };
 
@@ -112,44 +139,31 @@ exports.exportarDashboardExcel = async (req, res) => {
   try {
     const { fechaInicio, fechaFin } = req.query;
 
-    const filtro = construirFiltroFechas({
-      fechaInicio,
-      fechaFin,
-      alias: 'cp',
-      campo: 'fecha_consulta'
-    });
+    let params = [];
+    let whereClause = "";
+    if (fechaInicio && fechaFin) {
+      whereClause = "WHERE cp.fecha_consulta::date BETWEEN $1 AND $2";
+      params = [fechaInicio, fechaFin];
+    }
 
     const result = await pool.query(`
       SELECT
         cp.placa,
         cp.estado_consulta AS consulta_placa_exitosa,
         cp.fecha_consulta AS fecha_consulta_placa,
-
         rstp.tipo_identificacion_propietario,
         rstp.numero_identificacion_propietario,
         rstp.nombre_razon_social_propietario,
-        rstp.fecha_expedicion_tecno,
-        rstp.fecha_vigencia_tecno,
-        rstp.fecha_inicio_vigencia_soat,
-        rstp.fecha_vencimiento_vigencia_soat,
-
-        rdv.clase,
-        rdv.marca,
-        rdv.linea,
-        rdv.servicio,
-        rdv.color,
-        rdv.modelo,
+        rdv.clase, rdv.marca, rdv.linea, rdv.servicio, rdv.color, rdv.modelo,
         rdv.estado_consulta AS datos_vehiculo_exitoso,
         rdv.error_consulta,
         rdv.fecha_consulta AS fecha_consulta_datos_vehiculo
       FROM consultas_placas cp
-      LEFT JOIN runt_soat_tecno_propietario rstp
-        ON rstp.fk_consul_placa = cp.id_consul_placa
-      LEFT JOIN runt_datos_vehiculos rdv
-        ON rdv.fk_consul_placa = cp.id_consul_placa
-      ${filtro.where}
+      LEFT JOIN runt_soat_tecno_propietario rstp ON rstp.fk_consul_placa = cp.id_consul_placa
+      LEFT JOIN runt_datos_vehiculos rdv ON rdv.fk_consul_placa = cp.id_consul_placa
+      ${whereClause}
       ORDER BY COALESCE(rdv.fecha_consulta, rstp.fecha_consulta, cp.fecha_consulta) DESC
-    `, filtro.params);
+    `, params);
 
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Dashboard');
@@ -161,10 +175,6 @@ exports.exportarDashboardExcel = async (req, res) => {
       { header: 'Tipo ID propietario', key: 'tipo_identificacion_propietario', width: 25 },
       { header: 'Número ID propietario', key: 'numero_identificacion_propietario', width: 25 },
       { header: 'Nombre propietario', key: 'nombre_razon_social_propietario', width: 35 },
-      { header: 'Fecha expedición tecno', key: 'fecha_expedicion_tecno', width: 25 },
-      { header: 'Fecha vigencia tecno', key: 'fecha_vigencia_tecno', width: 25 },
-      { header: 'Inicio SOAT', key: 'fecha_inicio_vigencia_soat', width: 25 },
-      { header: 'Vencimiento SOAT', key: 'fecha_vencimiento_vigencia_soat', width: 25 },
       { header: 'Clase', key: 'clase', width: 20 },
       { header: 'Marca', key: 'marca', width: 20 },
       { header: 'Línea', key: 'linea', width: 20 },
@@ -176,35 +186,17 @@ exports.exportarDashboardExcel = async (req, res) => {
       { header: 'Fecha consulta datos vehículo', key: 'fecha_consulta_datos_vehiculo', width: 30 }
     ];
 
-    result.rows.forEach(row => {
-      sheet.addRow(row);
-    });
-
+    result.rows.forEach(row => sheet.addRow(row));
     sheet.getRow(1).font = { bold: true };
     sheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+    sheet.autoFilter = { from: 'A1', to: 'O1' };
 
-    sheet.autoFilter = {
-      from: 'A1',
-      to: 'T1'
-    };
-
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    );
-
-    res.setHeader(
-      'Content-Disposition',
-      'attachment; filename=dashboard-consultas.xlsx'
-    );
-
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=dashboard-consultas.xlsx');
     await workbook.xlsx.write(res);
     res.end();
 
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
+    return res.status(500).json({ ok: false, error: error.message });
   }
 };

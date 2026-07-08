@@ -229,3 +229,44 @@ exports.listarModulos = async (req, res) => {
     return res.status(500).json({ ok: false, error: error.message });
   }
 };
+
+exports.eliminarUsuario = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verificar que no se elimine a sí mismo
+    if (req.user.id_usuario === id) {
+      return res.status(400).json({
+        ok: false,
+        error: 'No puedes eliminar tu propio usuario'
+      });
+    }
+
+    // Eliminar módulos asociados primero
+    await pool.query(
+      'DELETE FROM usuario_modulos WHERE fk_usuario = $1',
+      [id]
+    );
+
+    // Eliminar usuario
+    const result = await pool.query(
+      'DELETE FROM usuarios WHERE id_usuario = $1 RETURNING id_usuario',
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Usuario no encontrado'
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: 'Usuario eliminado correctamente'
+    });
+
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+};

@@ -448,9 +448,17 @@ exports.imprimirPdfs = async (req, res) => {
       }
 
       try {
-        await pdf_to_printer.printPDF(filePath, printerOptions);
+        await pdf_to_printer.print(filePath, printerOptions);
         exitosas++;
         console.log(`[print] Impreso: ${safeName} ${config.printer_name ? `(impresora: ${config.printer_name})` : '(predeterminada)'}`);
+
+        // Eliminar PDF después de impresión exitosa
+        try {
+          fs.unlinkSync(filePath);
+          console.log(`[print] Eliminado: ${safeName}`);
+        } catch (deleteErr) {
+          console.warn(`[print] No se pudo eliminar ${safeName}: ${deleteErr.message}`);
+        }
       } catch (printErr) {
         fallidas++;
         errores.push(`${safeName}: ${printErr.message}`);

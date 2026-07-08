@@ -6,7 +6,8 @@ const {
   crearUsuario,
   actualizarUsuario,
   cambiarPasswordUsuario,
-  listarModulos
+  listarModulos,
+  eliminarUsuario
 } = require('../controllers/users.controller');
 
 const { verifyToken } = require('../middlewares/authMiddleware');
@@ -21,5 +22,7 @@ router.post('/', verifyToken, permitirModulo('configuracion'), crearUsuario);
 router.put('/:id', verifyToken, permitirModulo('configuracion'), actualizarUsuario);
 
 router.patch('/:id/password', verifyToken, permitirModulo('configuracion'), cambiarPasswordUsuario);
+
+router.delete('/:id', verifyToken, permitirModulo('configuracion'), eliminarUsuario);
 
 module.exports = router;
