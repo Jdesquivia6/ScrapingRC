@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { verifyToken } = require('../middlewares/authMiddleware');
 
 const {
   consultarLiquidacion,
@@ -19,9 +20,9 @@ router.post('/consultar-liquidacion-batch', consultarLiquidacionBatch);
 router.get('/descargar/:fileName', descargarLiquidacion);
 
 // Crear job de impresión local
-router.post('/crear-job-impresion', crearJobImpresion);
+router.post('/crear-job-impresion', verifyToken, crearJobImpresion);
 
 // Imprimir PDFs (legacy - ahora usa worker job)
-router.post('/imprimir-pdfs', imprimirPdfs);
+router.post('/imprimir-pdfs', verifyToken, imprimirPdfs);
 
 module.exports = router;
