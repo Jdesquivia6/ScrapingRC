@@ -33,7 +33,8 @@ const MODULES = new Set([
   'personas-direcciones',
   'liquidaciones',
   'liquidacion',
-  'ubicabilidad-personas'
+  'ubicabilidad-personas',
+  'imprimir-liquidaciones'
 ]);
 
 // Límite de ítems por job según módulo (evita sesiones RUNT muy largas)

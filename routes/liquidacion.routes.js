@@ -5,7 +5,8 @@ const {
   consultarLiquidacion,
   consultarLiquidacionBatch,
   descargarLiquidacion,
-  imprimirPdfs
+  imprimirPdfs,
+  crearJobImpresion
 } = require('../controllers/liquidacion.controller');
 
 // Consulta individual (soporta múltiples trámites)
@@ -17,7 +18,10 @@ router.post('/consultar-liquidacion-batch', consultarLiquidacionBatch);
 // Descargar PDF
 router.get('/descargar/:fileName', descargarLiquidacion);
 
-// Imprimir PDFs
+// Crear job de impresión local
+router.post('/crear-job-impresion', crearJobImpresion);
+
+// Imprimir PDFs (legacy - ahora usa worker job)
 router.post('/imprimir-pdfs', imprimirPdfs);
 
 module.exports = router;
