@@ -199,9 +199,7 @@ exports.listarResultados = async (req, res) => {
         p.direccion_encontrada,
         p.error_consulta_direccion,
         p.fecha_consulta_direccion,
-        p.origen_registro,
-        p.created_at,
-        p.updated_at
+        p.origen_registro
       FROM persona_natural_propietario p
       ${whereClause}
       ORDER BY p.fecha_consulta_direccion DESC NULLS LAST

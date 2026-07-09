@@ -34,6 +34,19 @@ const MODULES = new Set([
   'ubicabilidad-personas'
 ]);
 
+// Límite de ítems por job según módulo (evita sesiones RUNT muy largas)
+const MAX_ITEMS_POR_JOB = {
+  'ubicabilidad-personas': 90
+};
+
+function chunkArray(array, size) {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}
+
 function sanitizeEstado(estado, allowedSet) {
   if (!estado) return null;
   const value = String(estado).trim().toLowerCase();
@@ -180,53 +193,73 @@ exports.crearJob = async (req, res) => {
       });
     }
 
+    // Determinar tamaño de chunk según módulo (sin límite = todo en un job)
+    const limitePorJob = MAX_ITEMS_POR_JOB[moduloSanitizado];
+    const chunks = limitePorJob && preparedItems.length > limitePorJob
+      ? chunkArray(preparedItems, limitePorJob)
+      : [preparedItems];
+
     await client.query('BEGIN');
 
-    const jobInsert = await client.query(`
-      INSERT INTO worker_jobs (
-        modulo,
-        estado,
-        fk_usuario,
-        worker_name,
-        total,
-        procesadas,
-        exitosas,
-        fallidas
-      )
-      VALUES ($1, 'pendiente', $2, $3, $4, 0, 0, 0)
-      RETURNING *
-    `, [
-      moduloSanitizado,
-      req.user.id_usuario,
-      workerName,
-      preparedItems.length
-    ]);
+    const jobs = [];
 
-    const job = jobInsert.rows[0];
-
-    for (const payload of preparedItems) {
-      await client.query(`
-        INSERT INTO worker_job_items (
-          fk_job,
-          payload,
-          placa,
-          documento,
-          estado
+    for (const chunk of chunks) {
+      const jobInsert = await client.query(`
+        INSERT INTO worker_jobs (
+          modulo,
+          estado,
+          fk_usuario,
+          worker_name,
+          total,
+          procesadas,
+          exitosas,
+          fallidas
         )
-        VALUES ($1, $2::jsonb, $3, $4, 'pendiente')
+        VALUES ($1, 'pendiente', $2, $3, $4, 0, 0, 0)
+        RETURNING *
       `, [
-        job.id_job,
-        JSON.stringify(payload),
-        payload.placa || null,
-        extractDocumento(payload)
+        moduloSanitizado,
+        req.user.id_usuario,
+        workerName,
+        chunk.length
       ]);
+
+      const job = jobInsert.rows[0];
+
+      for (const payload of chunk) {
+        await client.query(`
+          INSERT INTO worker_job_items (
+            fk_job,
+            payload,
+            placa,
+            documento,
+            estado
+          )
+          VALUES ($1, $2::jsonb, $3, $4, 'pendiente')
+        `, [
+          job.id_job,
+          JSON.stringify(payload),
+          payload.placa || null,
+          extractDocumento(payload)
+        ]);
+      }
+
+      jobs.push(job);
     }
 
     await client.query('COMMIT');
 
+    if (jobs.length === 1) {
+      return res.status(201).json({
+        ok: true,
+        job: jobs[0]
+      });
+    }
+
     return res.status(201).json({
       ok: true,
-      job
+      jobs,
+      message: `Se crearon ${jobs.length} trabajos (máx ${limitePorJob} documentos cada uno)`
     });
 
   } catch (error) {
@@ -1364,7 +1397,7 @@ exports.guardarResultadoScraping = async (req, res) => {
           ]);
         }
 
-        // 3) Enviar al microservicio externo
+        // 3) Enviar al microservicio externo (no debe bloquear el guardado local)
         try {
           const body = {
             tipoDocumento: tipoDoc,
@@ -1389,11 +1422,16 @@ exports.guardarResultadoScraping = async (req, res) => {
             WHERE numero_documento = $1
           `, [numDoc]);
         } catch (err) {
-          await client.query(`
-            UPDATE persona_natural_propietario
-            SET intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1, error_envio_externo = $2
-            WHERE numero_documento = $1
-          `, [numDoc, err.message]);
+          console.warn(`[ubicabilidad-personas] Error enviando al externo ${numDoc}: ${err.message}`);
+          try {
+            await client.query(`
+              UPDATE persona_natural_propietario
+              SET intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1, error_envio_externo = $2
+              WHERE numero_documento = $1
+            `, [numDoc, err.message]);
+          } catch (updateErr) {
+            console.warn(`[ubicabilidad-personas] No se pudo registrar intento externo ${numDoc}: ${updateErr.message}`);
+          }
         }
       } else {
         // Sin direcciones o error — crear/actualizar con error
@@ -1435,6 +1473,8 @@ exports.guardarResultadoScraping = async (req, res) => {
 
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
+    console.error(`[guardarResultadoScraping] Error modulo=${modulo} item=${idItem}:`, error.message);
+    console.error(error.stack);
     return res.status(500).json({
       ok: false,
       error: error.message

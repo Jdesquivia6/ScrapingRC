@@ -12,7 +12,7 @@ const TOKEN = process.env.WORKER_TOKEN || '';
 const WORKER_EMAIL = process.env.WORKER_EMAIL || '';
 const WORKER_PASSWORD = process.env.WORKER_PASSWORD || '';
 const WORKER_NAME = process.env.WORKER_NAME || 'PC-LOCAL';
-const MODULES = (process.env.WORKER_MODULES || 'consulta-placa,datos-vehiculo,personas-direcciones,liquidaciones')
+const MODULES = (process.env.WORKER_MODULES || 'consulta-placa,datos-vehiculo,personas-direcciones,ubicabilidad-personas,liquidaciones')
   .split(',')
   .map((m) => m.trim())
   .filter(Boolean);
@@ -192,7 +192,9 @@ async function guardarResultadoScraping(jobId, itemId, modulo, resultado, fk_usu
     });
     console.log(`[worker] Resultado guardado en DB para ${modulo}`);
   } catch (error) {
-    console.error(`[worker] Error guardando resultado: ${error.message}`);
+    const status = error?.response?.status;
+    const serverError = error?.response?.data?.error || error?.response?.data?.message;
+    console.error(`[worker] Error guardando resultado: status=${status} msg=${error.message} server=${serverError}`);
   }
 }
 
@@ -277,7 +279,7 @@ async function resolverItem(modulo, payload) {
     }
   }
 
-  if (modulo === 'personas-direcciones') {
+  if (modulo === 'personas-direcciones' || modulo === 'ubicabilidad-personas') {
     const tipoDocumento = String(payload.tipoDocumento || '').trim();
     const numeroDocumento = String(payload.numeroDocumento || '').trim();
 
@@ -289,13 +291,13 @@ async function resolverItem(modulo, payload) {
     }
 
     try {
-      console.log(`[worker] Consultando direcciones ${tipoDocumento} ${numeroDocumento}...`);
+      console.log(`[worker] Consultando direcciones ${tipoDocumento} ${numeroDocumento} (${modulo})...`);
       const result = await scrapeDireccionesPN({ tipoDocumento, numeroDocumento });
 
       if (result.sessionExpired || result.error?.includes('sesion')) {
         return {
           estado: 'sesion_vencida',
-          error: result.error || 'Sesion vencida durante personas-direcciones'
+          error: result.error || `Sesion vencida durante ${modulo}`
         };
       }
 
@@ -309,7 +311,7 @@ async function resolverItem(modulo, payload) {
       if (!result.ok) {
         return {
           estado: 'fallido',
-          error: result.error || 'Fallo personas-direcciones',
+          error: result.error || `Fallo ${modulo}`,
           resultado: result
         };
       }

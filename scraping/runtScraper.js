@@ -29,6 +29,34 @@ function normalizarDocumento(documento) {
   return String(documento || '').trim();
 }
 
+function normalizarTipoDocumento(tipoDocumento) {
+  const tipo = String(tipoDocumento || '').trim().toUpperCase().replace(/\s+/g, ' ');
+
+  const mapa = {
+    'CC': 'C.C. Cédula Ciudadanía',
+    'C.C': 'C.C. Cédula Ciudadanía',
+    'C.C.': 'C.C. Cédula Ciudadanía',
+    'CEDULA': 'C.C. Cédula Ciudadanía',
+    'CÉDULA': 'C.C. Cédula Ciudadanía',
+    'CEDULA CIUDADANIA': 'C.C. Cédula Ciudadanía',
+    'CÉDULA CIUDADANÍA': 'C.C. Cédula Ciudadanía',
+    'CE': 'C.E. Cédula Extranjería',
+    'C.E': 'C.E. Cédula Extranjería',
+    'C.E.': 'C.E. Cédula Extranjería',
+    'CEDULA EXTRANJERIA': 'C.E. Cédula Extranjería',
+    'CÉDULA EXTRANJERÍA': 'C.E. Cédula Extranjería',
+    'PA': 'Pasaporte',
+    'PAS': 'Pasaporte',
+    'PASAPORTE': 'Pasaporte',
+    'NIT': 'NIT Número Identificación Tributaria',
+    'PPT': 'P.P.T. Permiso Protección Temporal',
+    'P.P.T': 'P.P.T. Permiso Protección Temporal',
+    'P.P.T.': 'P.P.T. Permiso Protección Temporal'
+  };
+
+  return mapa[tipo] || tipoDocumento;
+}
+
 function textoABooleanEstado(valor) {
   const texto = String(valor || '').trim().toLowerCase();
 
@@ -299,12 +327,14 @@ async function openTipoDocumentoSelect(page) {
 }
 
 async function selectTipoDocumento(page, tipoDocumento) {
+  const tipoNormalizado = normalizarTipoDocumento(tipoDocumento);
+
   await openTipoDocumentoSelect(page);
 
   await delay(page, 400, 1200);
 
   const opcion = page.locator('mat-option .mat-option-text', {
-    hasText: tipoDocumento
+    hasText: tipoNormalizado
   }).first();
 
   await opcion.waitFor({
@@ -313,6 +343,8 @@ async function selectTipoDocumento(page, tipoDocumento) {
   });
 
   await opcion.click({ force: true });
+
+  console.log(`✅ Tipo de documento seleccionado: ${tipoNormalizado}`);
 
   await delay(page, 800, 1800);
 }
