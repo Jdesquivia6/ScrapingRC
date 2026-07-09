@@ -1,5 +1,7 @@
 const pool = require('../utils/db');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 const { obtenerEstadoSesionRunt } = require('../utils/runtSession');
 const { API_HIKVISION } = require('../config');
 
@@ -1141,6 +1143,63 @@ exports.guardarResultadoScraping = async (req, res) => {
           true,
           null
         ]);
+      }
+    }
+
+    // ================================================
+    // LIQUIDACIONES: Guardar PDF + historial
+    // ================================================
+    else if (modulo === 'liquidaciones' || modulo === 'liquidacion') {
+      const placa = resultado.placa || resultado.data?.placa || '';
+      const tramites = resultado.data?.tramites || [];
+      const descarga = resultado.data?.descarga || {};
+
+      // Guardar PDF en servidor si viene base64
+      if (descarga.archivoLiquidacion && descarga.fileName) {
+        try {
+          const downloadsDir = path.join(process.cwd(), 'downloads');
+          if (!fs.existsSync(downloadsDir)) {
+            fs.mkdirSync(downloadsDir, { recursive: true });
+          }
+          const filePath = path.join(downloadsDir, descarga.fileName);
+          const buffer = Buffer.from(descarga.archivoLiquidacion, 'base64');
+          fs.writeFileSync(filePath, buffer);
+          console.log(`[worker] PDF guardado en servidor: ${descarga.fileName} (${buffer.length} bytes)`);
+        } catch (pdfErr) {
+          console.error(`[worker] Error guardando PDF: ${pdfErr.message}`);
+        }
+      }
+
+      // Guardar en historial
+      try {
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS historial_liquidaciones (
+            id SERIAL PRIMARY KEY,
+            placa VARCHAR(20) NOT NULL,
+            tramites TEXT,
+            total_tramites INTEGER DEFAULT 0,
+            exitosa BOOLEAN DEFAULT true,
+            error TEXT,
+            fecha_consulta TIMESTAMP DEFAULT NOW()
+          )
+        `);
+
+        const tramitesStr = Array.isArray(tramites)
+          ? tramites.map(t => t.tramite || String(t)).join(', ')
+          : String(tramites || '');
+
+        await client.query(`
+          INSERT INTO historial_liquidaciones (placa, tramites, total_tramites, exitosa, error)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [
+          placa,
+          tramitesStr,
+          Array.isArray(tramites) ? tramites.length : 0,
+          resultado.ok ? true : false,
+          resultado.ok ? null : (resultado.error || 'Error desconocido')
+        ]);
+      } catch (histErr) {
+        console.error(`[worker] Error guardando historial liquidación: ${histErr.message}`);
       }
     }
 
