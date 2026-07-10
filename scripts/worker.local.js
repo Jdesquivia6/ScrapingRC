@@ -2,7 +2,6 @@ require('dotenv').config();
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
-const pdf_to_printer = require('pdf-to-printer');
 
 // Scrapers locales (el worker tiene el huellero USB conectado)
 const { scrapeVehiculo } = require('../scraping/vehiculoScraper');
@@ -15,7 +14,7 @@ const TOKEN = process.env.WORKER_TOKEN || '';
 const WORKER_EMAIL = process.env.WORKER_EMAIL || '';
 const WORKER_PASSWORD = process.env.WORKER_PASSWORD || '';
 const WORKER_NAME = process.env.WORKER_NAME || 'PC-LOCAL';
-const MODULES = (process.env.WORKER_MODULES || 'consulta-placa,datos-vehiculo,personas-direcciones,ubicabilidad-personas,liquidaciones,imprimir-liquidaciones')
+const MODULES = (process.env.WORKER_MODULES || 'consulta-placa,datos-vehiculo,personas-direcciones,ubicabilidad-personas,liquidaciones')
   .split(',')
   .map((m) => m.trim())
   .filter(Boolean);
@@ -374,44 +373,6 @@ async function resolverItem(modulo, payload) {
       return {
         estado: 'fallido',
         error: `Error scraping local: ${error.message}`
-      };
-    }
-  }
-
-  if (modulo === 'imprimir-liquidaciones') {
-    const fileName = payload.fileName;
-
-    if (!fileName) {
-      return {
-        estado: 'fallido',
-        error: 'Payload invalido: fileName es obligatorio'
-      };
-    }
-
-    try {
-      const safeName = path.basename(fileName);
-      const filePath = path.join(DOWNLOAD_DIR, safeName);
-
-      if (!fs.existsSync(filePath)) {
-        return {
-          estado: 'fallido',
-          error: `PDF no encontrado localmente: ${safeName}`
-        };
-      }
-
-      console.log(`[worker] Imprimiendo PDF local: ${safeName}`);
-      await pdf_to_printer.print(filePath);
-      console.log(`[worker] PDF impreso correctamente: ${safeName}`);
-
-      return {
-        estado: 'exitoso',
-        resultado: { fileName: safeName, impreso: true }
-      };
-    } catch (error) {
-      console.error(`[worker] Error imprimiendo ${fileName}:`, error.message);
-      return {
-        estado: 'fallido',
-        error: `Error imprimiendo: ${error.message}`
       };
     }
   }

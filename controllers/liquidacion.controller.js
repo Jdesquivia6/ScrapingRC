@@ -416,74 +416,7 @@ exports.consultarLiquidacionBatch = async (req, res) => {
 };
 
 /**
- * Crea un worker job para imprimir PDFs localmente.
- * POST /api/liquidacion/crear-job-impresion
- * Body: { fileNames: string[] }
- */
-exports.crearJobImpresion = async (req, res) => {
-  const client = await pool.connect();
-
-  try {
-    const { fileNames } = req.body;
-
-    if (!fileNames || !Array.isArray(fileNames) || fileNames.length === 0) {
-      return res.status(400).json({ ok: false, error: 'Debe enviar un array fileNames' });
-    }
-
-    await client.query('BEGIN');
-
-    const jobInsert = await client.query(`
-      INSERT INTO worker_jobs (
-        modulo,
-        estado,
-        fk_usuario,
-        worker_name,
-        total,
-        procesadas,
-        exitosas,
-        fallidas
-      )
-      VALUES ($1, 'pendiente', $2, NULL, $3, 0, 0, 0)
-      RETURNING *
-    `, ['imprimir-liquidaciones', req.user.id_usuario, fileNames.length]);
-
-    const job = jobInsert.rows[0];
-
-    for (const fileName of fileNames) {
-      await client.query(`
-        INSERT INTO worker_job_items (
-          fk_job,
-          payload,
-          placa,
-          documento,
-          estado
-        )
-        VALUES ($1, $2::jsonb, $3, $4, 'pendiente')
-      `, [
-        job.id_job,
-        JSON.stringify({ fileName }),
-        null,
-        null
-      ]);
-    }
-
-    await client.query('COMMIT');
-
-    return res.json({
-      ok: true,
-      job,
-      message: `Job de impresión creado con ${fileNames.length} PDF(s)`
-    });
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    return res.status(500).json({ ok: false, error: error.message });
-  } finally {
-    client.release();
-  }
-};
-
-/**
- * Imprime una lista de PDFs de liquidacion (legacy - ahora usa worker job).
+ * Imprime una lista de PDFs de liquidacion de forma sincrónica.
  * POST /api/liquidacion/imprimir-pdfs
  * Body: { fileNames: string[] }
  */
