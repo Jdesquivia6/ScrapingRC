@@ -116,6 +116,15 @@ async function esperarNgValid(page, selector, timeout = 15000) {
 }
 
 async function esperarCierreOverlaysMatSelect(page) {
+  // Si no hay overlay activo, no esperar
+  const hayOverlay = await page.evaluate(() => {
+    return document.querySelectorAll('.cdk-overlay-pane, .cdk-overlay-backdrop').length > 0;
+  });
+  if (!hayOverlay) {
+    await pausa(page, 50, 100);
+    return;
+  }
+
   await page.waitForFunction(
     () => {
       const panels = document.querySelectorAll('.mat-select-panel:not([style*="display: none"])');
@@ -130,9 +139,9 @@ async function esperarCierreOverlaysMatSelect(page) {
       });
       return !panelVisible && !backdropVisible;
     },
-    { timeout: 5000 }
+    { timeout: 3000 }
   );
-  await pausa(page, 80, 150);
+  await pausa(page, 50, 100);
 }
 
 // ─────────────────────────────────────────────
@@ -144,6 +153,11 @@ async function esperarCierreOverlaysMatSelect(page) {
  */
 async function ocultarTooltipsPersistentes(page) {
   try {
+    const hayTooltip = await page.evaluate(() => {
+      return document.querySelectorAll('.mat-tooltip-show, .mat-tooltip-handled').length > 0;
+    });
+    if (!hayTooltip) return;
+
     await page.mouse.move(10, 10);
     await page.evaluate(() => {
       document.querySelectorAll('.mat-tooltip-show, .mat-tooltip-handled').forEach(t => {
@@ -152,7 +166,7 @@ async function ocultarTooltipsPersistentes(page) {
         t.style.pointerEvents = 'none';
       });
     });
-    await pausa(page, 150, 300);
+    await pausa(page, 80, 150);
   } catch (_) {
     // Si falla, continuar de todos modos
   }
@@ -230,11 +244,11 @@ async function seleccionarOpcionMatSelect(page, selector, textoOpcion) {
 }
 
 async function escribirLento(locator, valor) {
-  await locator.waitFor({ state: 'visible', timeout: 15000 });
+  await locator.waitFor({ state: 'visible', timeout: 8000 });
   await locator.click();
   await locator.fill('');
   for (const ch of String(valor)) {
-    await locator.type(ch, { delay: random(30, 60) });
+    await locator.type(ch, { delay: random(15, 30) });
   }
 }
 
@@ -405,27 +419,33 @@ async function diligenciarFecha(page, fecha) {
     const existe = await input.count();
     if (!existe) continue;
 
-    await input.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+    await input.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {});
     const visible = await input.isVisible().catch(() => false);
     if (!visible) continue;
+
+    const valorActual = await input.inputValue().catch(() => '');
+    if (valorActual && valorActual.includes(partesFecha[0])) {
+      console.log(`[scraper] Fecha liquidación ya tiene valor, saltando`);
+      return;
+    }
 
     const isReadonly = await input.getAttribute('readonly').catch(() => null);
 
     if (isReadonly === 'true' || isReadonly === '') {
       // Campo readonly → abrir datepicker con click y escribir en el popup
       await input.click();
-      await pausa(page, 300, 600);
+      await pausa(page, 100, 200);
 
       // Buscar el input del datepicker popup que suele aparecer
       const popupInput = page.locator('mat-datepicker-content input, .mat-datepicker-content input').first();
       try {
-        await popupInput.waitFor({ state: 'visible', timeout: 5000 });
+        await popupInput.waitFor({ state: 'visible', timeout: 1500 });
         await popupInput.fill('');
-        await popupInput.type(fechaFormateada, { delay: 30 });
-        await pausa(page, 200, 400);
+        await popupInput.type(fechaFormateada, { delay: 15 });
+        await pausa(page, 80, 150);
         // Cerrar el popup con Tab o click fuera
         await input.press('Tab');
-        await pausa(page, 250, 500);
+        await pausa(page, 80, 150);
         console.log(`[scraper] Fecha liquidación OK (readonly): ${fechaFormateada} (selector: ${selector})`);
         return;
       } catch {
@@ -438,7 +458,7 @@ async function diligenciarFecha(page, fecha) {
       // Campo editable → usar fill directo
       await input.fill('');
       await input.fill(fechaFormateada);
-      await pausa(page, 200, 400);
+      await pausa(page, 100, 200);
       console.log(`[scraper] Fecha liquidación OK: ${fechaFormateada} (selector: ${selector})`);
       return;
     }
@@ -477,26 +497,26 @@ async function procesarPlaca(page, placa) {
     'input[formcontrolname="formNroPlaca"], ' +
     'input[placeholder*="placa"]'
   ).first();
-  await inputPlaca.waitFor({ state: 'visible', timeout: 15000 });
+  await inputPlaca.waitFor({ state: 'visible', timeout: 8000 });
 
   // ── Digitación 1 ──
   await escribirLento(inputPlaca, placaNormalizada);
-  await pausa(page, 200, 400);
+  await pausa(page, 80, 150);
   await inputPlaca.press('Tab');
-  await pausa(page, 500, 900);
+  await pausa(page, 200, 350);
 
   // ── Digitación 2 (confirmación RUNT) ──
   await inputPlaca.click();
-  await pausa(page, 150, 300);
+  await pausa(page, 80, 150);
   await inputPlaca.fill('');
-  await pausa(page, 150, 300);
+  await pausa(page, 80, 150);
   await escribirLento(inputPlaca, placaNormalizada);
-  await pausa(page, 200, 400);
+  await pausa(page, 80, 150);
   await inputPlaca.press('Tab');
-  await pausa(page, 600, 1000);
+  await pausa(page, 250, 400);
 
   // Validar ng-valid
-  await esperarNgValid(page, '[formcontrolname="formNroPlaca"]', 15000);
+  await esperarNgValid(page, '[formcontrolname="formNroPlaca"]', 8000);
 
   return { placa: placaNormalizada };
 }

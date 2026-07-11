@@ -872,14 +872,14 @@ exports.actualizarEstadoJobWorker = async (req, res) => {
 
     const result = await pool.query(`
       UPDATE worker_jobs
-      SET estado = $2,
+      SET estado = $2::varchar,
           error = $3,
           started_at = CASE
-            WHEN $2 = 'procesando' THEN COALESCE(started_at, NOW())
+            WHEN $2::varchar = 'procesando' THEN COALESCE(started_at, NOW())
             ELSE started_at
           END,
           finished_at = CASE
-            WHEN $2 IN ('finalizado', 'fallido') THEN NOW()
+            WHEN $2::varchar IN ('finalizado', 'fallido') THEN NOW()
             ELSE NULL
           END
       WHERE id_job = $1
