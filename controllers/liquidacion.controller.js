@@ -422,10 +422,24 @@ exports.consultarLiquidacionBatch = async (req, res) => {
  */
 exports.imprimirPdfs = async (req, res) => {
   try {
-    const { fileNames } = req.body;
+    // Soportar POST (JSON body) y GET (query param) para compatibilidad con navegador
+    let fileNames = [];
+    if (req.method === 'GET') {
+      const filesParam = (req.query.files || '').toString();
+      if (!filesParam) {
+        return res.status(400).send(htmlRespuesta('Error', 'No se recibieron archivos para imprimir'));
+      }
+      fileNames = filesParam.split(',').map(f => f.trim()).filter(Boolean);
+    } else {
+      fileNames = req.body.fileNames;
+    }
 
-    if (!fileNames || !Array.isArray(fileNames) || fileNames.length === 0) {
-      return res.status(400).json({ ok: false, error: 'Debe enviar un array fileNames' });
+    if (!Array.isArray(fileNames) || fileNames.length === 0) {
+      const msg = 'Debe enviar un array fileNames';
+      if (req.method === 'GET') {
+        return res.status(400).send(htmlRespuesta('Error', msg));
+      }
+      return res.status(400).json({ ok: false, error: msg });
     }
 
     const config = await obtenerConfigImpresora();
@@ -466,6 +480,15 @@ exports.imprimirPdfs = async (req, res) => {
       }
     }
 
+    if (req.method === 'GET') {
+      const titulo = fallidas === 0 ? 'Éxito' : 'Parcial';
+      const mensaje = fallidas === 0
+        ? `${exitosas} PDF(s) enviado(s) a la impresora`
+        : `${exitosas} impreso(s), ${fallidas} fallido(s)`;
+      const detalle = errores.length > 0 ? `<br><small>${errores.join('<br>')}</small>` : '';
+      return res.send(htmlRespuesta(titulo, mensaje + detalle));
+    }
+
     res.json({
       ok: true,
       data: {
@@ -476,6 +499,35 @@ exports.imprimirPdfs = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('[print] Error general:', error);
+    if (req.method === 'GET') {
+      return res.status(500).send(htmlRespuesta('Error', error.message));
+    }
     res.status(500).json({ ok: false, error: error.message });
   }
 };
+
+function htmlRespuesta(titulo, mensaje) {
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Impresión - ${titulo}</title>
+  <style>
+    body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }
+    .card { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+    .ok { color: #2e7d32; }
+    .warn { color: #f57c00; }
+    .error { color: #c62828; }
+    small { color: #666; display: block; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2 class="${titulo === 'Éxito' ? 'ok' : titulo === 'Parcial' ? 'warn' : 'error'}">${titulo}</h2>
+    <p>${mensaje}</p>
+  </div>
+</body>
+</html>`;
+}

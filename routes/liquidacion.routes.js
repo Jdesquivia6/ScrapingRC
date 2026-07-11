@@ -20,5 +20,6 @@ router.get('/descargar/:fileName', descargarLiquidacion);
 
 // Imprimir PDFs de liquidación (usado por backend local para impresión directa)
 router.post('/imprimir-pdfs', verifyToken, imprimirPdfs);
+router.get('/imprimir-pdfs', imprimirPdfs);
 
 module.exports = router;

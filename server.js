@@ -23,7 +23,35 @@ const {
 
 const app = express();
 
-app.use(cors());
+const allowedOrigins = [
+  'http://84.247.165.214:5173',  // Frontend en producción
+  'http://localhost:5173',        // Desarrollo local
+  'http://127.0.0.1:5173',        // Desarrollo local
+  'http://localhost:3000'         // Origen local
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allowOrigin = !origin || allowedOrigins.includes(origin)
+    ? (origin || '*')
+    : false;
+
+  if (allowOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+  }
+
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+
+  next();
+});
+
 app.use(express.json());
 
 app.use('/api/personas/direcciones', civitransRoutes);
