@@ -59,6 +59,25 @@ async function pausa(page, min = 300, max = 800) {
 }
 
 // ─────────────────────────────────────────────
+// TIMER PARA MEDICIÓN DE RENDIMIENTO
+// ─────────────────────────────────────────────
+
+async function medirTiempo(label, fn) {
+  const inicio = Date.now();
+  console.log(`[scraper] [START] ${label}`);
+  try {
+    const resultado = await fn();
+    const duracion = Date.now() - inicio;
+    console.log(`[scraper] [END] ${label} | ${duracion}ms (${(duracion / 1000).toFixed(1)}s)`);
+    return resultado;
+  } catch (error) {
+    const duracion = Date.now() - inicio;
+    console.log(`[scraper] [FAIL] ${label} | ${duracion}ms (${(duracion / 1000).toFixed(1)}s) | ${error.message}`);
+    throw error;
+  }
+}
+
+// ─────────────────────────────────────────────
 // HELPERS DE ESPERA ANGULAR/MATERIAL
 // ─────────────────────────────────────────────
 
@@ -120,9 +139,31 @@ async function esperarCierreOverlaysMatSelect(page) {
 // INTERACCIÓN CON FORMULARIOS
 // ─────────────────────────────────────────────
 
+/**
+ * Oculta tooltips persistentes de Angular Material que pueden interceptar clicks.
+ */
+async function ocultarTooltipsPersistentes(page) {
+  try {
+    await page.mouse.move(10, 10);
+    await page.evaluate(() => {
+      document.querySelectorAll('.mat-tooltip-show, .mat-tooltip-handled').forEach(t => {
+        t.classList.remove('mat-tooltip-show', 'mat-tooltip-handled');
+        t.style.opacity = '0';
+        t.style.pointerEvents = 'none';
+      });
+    });
+    await pausa(page, 150, 300);
+  } catch (_) {
+    // Si falla, continuar de todos modos
+  }
+}
+
 async function seleccionarOpcionMatSelect(page, selector, textoOpcion) {
   const valor = normalizarTexto(textoOpcion);
   if (!valor) return;
+
+  await cerrarSweetAlertsInesperados(page);
+  await ocultarTooltipsPersistentes(page);
 
   await esperarElementoHabilitado(page, selector);
   await pausa(page, 300, 600);
@@ -231,6 +272,18 @@ async function manejarSweetAlert(page, textoBoton = 'Continuar', timeout = 20000
     return false;
   } catch {
     return false; // No apareció SweetAlert
+  }
+}
+
+/**
+ * Cierra SweetAlerts inesperados que bloquean la interfaz.
+ * Útil antes de interactuar con selects o entre pasos.
+ */
+async function cerrarSweetAlertsInesperados(page) {
+  try {
+    await manejarSweetAlert(page, 'Aceptar', 3000);
+  } catch (_) {
+    // Ignorar si no hay SweetAlert
   }
 }
 
@@ -633,6 +686,7 @@ async function prepararPagina(page) {
     });
   }
   await page.waitForLoadState('networkidle').catch(() => {});
+  await cerrarSweetAlertsInesperados(page);
   await pausa(page, 1500, 2500);
 }
 
@@ -686,25 +740,24 @@ async function scrapeLiquidacionTramite({
     console.log(`[scraper] Procesando ${tramites.length} trámite(s):`,
       tramites.map(t => `${t.tramite} (${t.clasificacion})`).join(', '));
 
+    const inicioTotal = Date.now();
+
     // ── Navegación ──
-    await prepararPagina(page);
+    await medirTiempo('Preparar página', () => prepararPagina(page));
     console.log('[scraper] Página cargada');
 
     // ── 1) Solicitante ──
-    console.log('[scraper] Diligenciando solicitante...');
-    const datosSolicitante = await diligenciarSolicitante(page);
+    const datosSolicitante = await medirTiempo('Diligenciar solicitante', () => diligenciarSolicitante(page));
     console.log('[scraper] Solicitante OK:', datosSolicitante.nombreSolicitante);
 
     // ── 1b) Fecha liquidación ──
-    await diligenciarFecha(page, fechaLiquidacion);
+    await medirTiempo('Diligenciar fecha', () => diligenciarFecha(page, fechaLiquidacion));
 
     // ── 2) RNA ──
-    console.log('[scraper] Seleccionando registro RNA...');
-    await seleccionarRegistroRNA(page);
+    await medirTiempo('Seleccionar RNA', () => seleccionarRegistroRNA(page));
 
     // ── 3) Placa ──
-    console.log('[scraper] Procesando placa...');
-    const datosPlaca = await procesarPlaca(page, placa);
+    const datosPlaca = await medirTiempo('Procesar placa', () => procesarPlaca(page, placa));
     console.log('[scraper] Placa OK:', datosPlaca.placa);
 
     // ── 4) Iterar sobre cada trámite ──
@@ -715,28 +768,28 @@ async function scrapeLiquidacionTramite({
       const { tramite, clasificacion } = tramites[i];
       console.log(`[scraper] === Trámite ${i + 1}/${tramites.length}: ${tramite} ===`);
 
+      // Cerrar cualquier SweetAlert residual antes de continuar
+      await cerrarSweetAlertsInesperados(page);
+
       // ── 4a) Seleccionar trámite ──
-      console.log(`[scraper] Seleccionando trámite...`);
-      const tramiteSeleccionado = await seleccionarTramite(page, tramite);
+      const tramiteSeleccionado = await medirTiempo(`Seleccionar trámite ${i + 1}`, () => seleccionarTramite(page, tramite));
       console.log(`[scraper] Trámite OK: ${tramiteSeleccionado}`);
 
       // ── 4b) Seleccionar clasificación (solo la primera vez, luego RUNT la mantiene) ──
       let clasificacionSeleccionada = null;
       if (i === 0) {
-        console.log(`[scraper] Seleccionando clasificación: ${clasificacion}...`);
-        clasificacionSeleccionada = await seleccionarClasificacion(page, clasificacion);
+        clasificacionSeleccionada = await medirTiempo('Seleccionar clasificación', () => seleccionarClasificacion(page, clasificacion));
         primeraClasificacion = clasificacionSeleccionada;
         console.log(`[scraper] Clasificación OK: ${clasificacionSeleccionada}`);
       } else {
         // La clasificación ya está seleccionada del trámite anterior
         clasificacionSeleccionada = primeraClasificacion;
         console.log(`[scraper] Clasificación ya seleccionada: ${clasificacionSeleccionada}`);
-        await pausa(page, 600, 1200);
+        await medirTiempo('Pausa clasificación ya seleccionada', async () => { await pausa(page, 600, 1200); });
       }
 
       // ── 4c) Tarifa automática (según combo trámite + clasificación) ──
-      console.log(`[scraper] Resolviendo tarifa...`);
-      const tarifaResultado = await resolverTarifa(page, tramiteSeleccionado, clasificacionSeleccionada);
+      const tarifaResultado = await medirTiempo('Resolver tarifa', () => resolverTarifa(page, tramiteSeleccionado, clasificacionSeleccionada));
       console.log(`[scraper] Tarifa OK:`, JSON.stringify(tarifaResultado));
 
       tramitesProcesados.push({
@@ -747,31 +800,37 @@ async function scrapeLiquidacionTramite({
 
       // Pausa entre trámites para que Angular procese la tabla
       await pausa(page, 900, 1800);
+      await cerrarSweetAlertsInesperados(page);
     }
 
     // ── 5) Leer tabla de trámites (con retry para MEDIDAS CAUTELARES) ──
-    await pausa(page, 1200, 2000);
-    let tramitesTabla = await leerTablaTramites(page);
-    console.log('[scraper] Tabla filas:', tramitesTabla.length);
+    let tramitesTabla = await medirTiempo('Leer tabla de trámites', async () => {
+      await pausa(page, 1200, 2000);
+      let tabla = await leerTablaTramites(page);
+      console.log('[scraper] Tabla filas:', tabla.length);
 
-    // Si la tabla está vacía y es MEDIDAS CAUTELARES, esperar más (Angular tarda en auto-colocar tarifa)
-    if (tramitesTabla.length === 0 && primeraClasificacion && primeraClasificacion.includes('MEDIDAS CAUTELARES')) {
-      console.log('[scraper] Tabla vacía con MEDIDAS CAUTELARES — esperando más tiempo para que Angular procese...');
-      await pausa(page, 4000, 6000);
-      tramitesTabla = await leerTablaTramites(page);
-      console.log('[scraper] Tabla filas (retry):', tramitesTabla.length);
-    }
+      // Si la tabla está vacía y es MEDIDAS CAUTELARES, esperar más (Angular tarda en auto-colocar tarifa)
+      if (tabla.length === 0 && primeraClasificacion && primeraClasificacion.includes('MEDIDAS CAUTELARES')) {
+        console.log('[scraper] Tabla vacía con MEDIDAS CAUTELARES — esperando más tiempo para que Angular procese...');
+        await pausa(page, 4000, 6000);
+        tabla = await leerTablaTramites(page);
+        console.log('[scraper] Tabla filas (retry):', tabla.length);
+      }
+      return tabla;
+    });
 
     validarTramitesLiquidables(tramitesTabla);
 
     // ── 6) Generar y capturar PDF por API ──
-    console.log('[scraper] Generando PDF...');
-    const descarga = await generarYCapturarPDF(page);
+    const descarga = await medirTiempo('Generar y capturar PDF', () => generarYCapturarPDF(page));
     console.log('[scraper] PDF OK:', descarga.fileName, descarga.tamanoBytes + ' bytes');
 
     // ── 7) Aceptar SweetAlert de éxito ──
-    await aceptarSweetAlertExito(page);
+    await medirTiempo('Aceptar SweetAlert éxito', () => aceptarSweetAlertExito(page));
     console.log('[scraper] SweetAlert éxito aceptado');
+
+    const total = Date.now() - inicioTotal;
+    console.log(`[scraper] [TOTAL] Liquidación completada en ${total}ms (${(total / 1000).toFixed(1)}s)`);
 
     return {
       ok: true,
