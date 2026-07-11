@@ -56,7 +56,7 @@ async function refreshToken() {
 // Interceptor para manejar 401 y reintentar con nuevo token
 const api = axios.create({
   baseURL: API_BASE,
-  timeout: 30000
+  timeout: 60000
 });
 
 // Agregar interceptor de request
@@ -130,13 +130,32 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function timedApiCall(label, fn) {
+  const start = Date.now();
+  try {
+    const result = await fn();
+    const elapsed = Date.now() - start;
+    if (elapsed > 2000) {
+      console.log(`[worker] [SLOW API] ${label} tardó ${elapsed}ms`);
+    }
+    return result;
+  } catch (error) {
+    const elapsed = Date.now() - start;
+    const responseBody = error?.response?.data
+      ? JSON.stringify(error.response.data)
+      : '(sin body)';
+    console.error(`[worker] [API ERROR] ${label} | ${elapsed}ms | ${error.message} | body=${responseBody}`);
+    throw error;
+  }
+}
+
 async function heartbeat() {
   try {
-    const response = await api.post('/worker-jobs/worker/heartbeat', {
+    const response = await timedApiCall('heartbeat', () => api.post('/worker-jobs/worker/heartbeat', {
       workerName: WORKER_NAME,
       modulosPermitidos: MODULES,
       huellaViva: HUELLA_VIVA
-    });
+    }));
 
     return response.data;
   } catch (error) {
@@ -149,15 +168,15 @@ async function heartbeat() {
 
 async function tomarSiguiente() {
   try {
-    const session = await api.get('/runt-session/estado');
+    const session = await timedApiCall('runt-session/estado', () => api.get('/runt-session/estado'));
     const sesionActiva = Boolean(session.data?.session?.activa && session.data?.session?.puedeConsultar);
 
-    const response = await api.post('/worker-jobs/worker/tomar-siguiente', {
+    const response = await timedApiCall('tomar-siguiente', () => api.post('/worker-jobs/worker/tomar-siguiente', {
       workerName: WORKER_NAME,
       modulosPermitidos: MODULES,
       sesionActiva,
       huellaViva: HUELLA_VIVA
-    });
+    }));
 
     return response.data;
   } catch (error) {
@@ -169,30 +188,30 @@ async function tomarSiguiente() {
 }
 
 async function setJobEstado(jobId, estado, error = null) {
-  await api.post(`/worker-jobs/${jobId}/worker/estado`, {
+  await timedApiCall(`setJobEstado ${estado}`, () => api.post(`/worker-jobs/${jobId}/worker/estado`, {
     estado,
     error
-  });
+  }));
 }
 
 async function setItemEstado(jobId, itemId, estado, resultado = null, error = null) {
-  await api.post(`/worker-jobs/${jobId}/worker/item-estado`, {
+  await timedApiCall('setItemEstado', () => api.post(`/worker-jobs/${jobId}/worker/item-estado`, {
     idItem: itemId,
     estado,
     resultado,
     error
-  });
+  }));
 }
 
 // Guardar resultado en DB del servidor
 async function guardarResultadoScraping(jobId, itemId, modulo, resultado, fk_usuario) {
   try {
-    await api.post(`/worker-jobs/${jobId}/worker/guardar-resultado`, {
+    await timedApiCall('guardar-resultado', () => api.post(`/worker-jobs/${jobId}/worker/guardar-resultado`, {
       idItem: itemId,
       modulo,
       resultado,
       fk_usuario
-    });
+    }));
     console.log(`[worker] Resultado guardado en DB para ${modulo}`);
   } catch (error) {
     const status = error?.response?.status;
@@ -426,6 +445,20 @@ async function procesarJob(job, items) {
     }
 
     await sleep(250);
+  }
+
+  // El backend auto-finaliza el job al reportar el último item.
+  // Esta llamada es sólo un respaldo; ignoramos errores 500 si ya fue finalizado.
+  try {
+    await setJobEstado(job.id_job, 'finalizado');
+    console.log(`[worker] Job ${job.id_job} marcado como finalizado`);
+  } catch (err) {
+    const status = err?.response?.status;
+    if (status === 500) {
+      console.log(`[worker] Job ${job.id_job} ya fue finalizado por el backend (status 500)`);
+    } else {
+      console.error(`[worker] Error marcando job ${job.id_job} como finalizado:`, err.message);
+    }
   }
 }
 

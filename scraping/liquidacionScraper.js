@@ -130,9 +130,9 @@ async function esperarCierreOverlaysMatSelect(page) {
       });
       return !panelVisible && !backdropVisible;
     },
-    { timeout: 10000 }
+    { timeout: 5000 }
   );
-  await pausa(page, 150, 300);
+  await pausa(page, 80, 150);
 }
 
 // ─────────────────────────────────────────────
@@ -161,50 +161,72 @@ async function ocultarTooltipsPersistentes(page) {
 async function seleccionarOpcionMatSelect(page, selector, textoOpcion) {
   const valor = normalizarTexto(textoOpcion);
   if (!valor) return;
+  const inicioTotal = Date.now();
+  const marcas = [];
+  const marcar = (paso) => {
+    marcas.push({ paso, t: Date.now() - inicioTotal });
+  };
 
-  await cerrarSweetAlertsInesperados(page);
-  await ocultarTooltipsPersistentes(page);
-
-  await esperarElementoHabilitado(page, selector);
-  await pausa(page, 300, 600);
-
-  // Click para abrir el panel
-  const select = page.locator(selector).first();
-  await select.click();
-  await pausa(page, 400, 900);
-
-  // Esperar que aparezca al menos un mat-option (el panel se abrió)
-  const opciones = page.locator('mat-option, .mat-option-text');
   try {
-    await opciones.first().waitFor({ state: 'visible', timeout: 10000 });
-  } catch {
-    // Si no aparecen opciones, el select puede estar vacío o bloqueado
-    // Intentar cerrar el panel haciendo click fuera
-    await page.mouse.click(10, 10);
-    throw new Error(`No aparecieron opciones en ${selector} al seleccionar "${valor}"`);
+    await cerrarSweetAlertsInesperados(page);
+    marcar('cerrarSweetAlerts');
+
+    await ocultarTooltipsPersistentes(page);
+    marcar('ocultarTooltips');
+
+    await esperarElementoHabilitado(page, selector, 12000);
+    marcar('esperarHabilitado');
+    await pausa(page, 100, 200);
+
+    // Click para abrir el panel (JS click evita espera de estabilidad de Playwright)
+    const select = page.locator(selector).first();
+    await select.evaluate(el => el.click());
+    marcar('clickSelect');
+    await pausa(page, 100, 200);
+
+    // Esperar que aparezca al menos un mat-option (el panel se abrió)
+    const opciones = page.locator('.cdk-overlay-pane mat-option, .cdk-overlay-pane .mat-option-text');
+    try {
+      await opciones.first().waitFor({ state: 'visible', timeout: 5000 });
+      marcar('waitForOpciones');
+    } catch {
+      await page.mouse.click(10, 10);
+      throw new Error(`No aparecieron opciones en ${selector} al seleccionar "${valor}"`);
+    }
+
+    await pausa(page, 80, 150);
+
+    // Buscar opción por texto exacto o parcial
+    const optionSelector = `.cdk-overlay-pane mat-option`;
+    let opcion = page.locator(optionSelector).filter({ hasText: valor }).first();
+    if (await opcion.count() && await opcion.isVisible().catch(() => false)) {
+      await opcion.evaluate(el => el.click());
+      marcar('clickOpcion');
+      await esperarCierreOverlaysMatSelect(page);
+      marcar('cerrarOverlay');
+      const duracion = Date.now() - inicioTotal;
+      console.log(`[scraper] [TIME] seleccionarOpcionMatSelect("${valor}") | ${duracion}ms | ${JSON.stringify(marcas)}`);
+      return;
+    }
+
+    // Fallback: buscar por .mat-option-text
+    const opcionTexto = page.locator('.cdk-overlay-pane .mat-option-text').filter({ hasText: valor }).first();
+    if (await opcionTexto.count() && await opcionTexto.isVisible().catch(() => false)) {
+      await opcionTexto.evaluate(el => el.click());
+      marcar('clickOpcionTexto');
+      await esperarCierreOverlaysMatSelect(page);
+      marcar('cerrarOverlay');
+      const duracion = Date.now() - inicioTotal;
+      console.log(`[scraper] [TIME] seleccionarOpcionMatSelect("${valor}") | ${duracion}ms | ${JSON.stringify(marcas)}`);
+      return;
+    }
+
+    throw new Error(`Opción "${valor}" no encontrada en ${selector}`);
+  } catch (error) {
+    const duracion = Date.now() - inicioTotal;
+    console.error(`[scraper] [TIME] seleccionarOpcionMatSelect("${valor}") FAIL | ${duracion}ms | ${JSON.stringify(marcas)} | ${error.message}`);
+    throw error;
   }
-
-  await pausa(page, 200, 400);
-
-  // Buscar opción por texto exacto o parcial
-  let opcion = page.locator('mat-option').filter({ hasText: valor }).first();
-  if (await opcion.count() && await opcion.isVisible().catch(() => false)) {
-    await pausa(page, 150, 300);
-    await opcion.click();
-    await esperarCierreOverlaysMatSelect(page);
-    return;
-  }
-
-  // Fallback: buscar por .mat-option-text
-  const opcionTexto = page.locator('.mat-option-text').filter({ hasText: valor }).first();
-  if (await opcionTexto.count() && await opcionTexto.isVisible().catch(() => false)) {
-    await pausa(page, 150, 300);
-    await opcionTexto.click();
-    await esperarCierreOverlaysMatSelect(page);
-    return;
-  }
-
-  throw new Error(`Opción "${valor}" no encontrada en ${selector}`);
 }
 
 async function escribirLento(locator, valor) {
@@ -212,7 +234,7 @@ async function escribirLento(locator, valor) {
   await locator.click();
   await locator.fill('');
   for (const ch of String(valor)) {
-    await locator.type(ch, { delay: random(50, 110) });
+    await locator.type(ch, { delay: random(30, 60) });
   }
 }
 
@@ -233,13 +255,13 @@ async function manejarSweetAlert(page, textoBoton = 'Continuar', timeout = 20000
     let swal = page.locator('.swal2-popup.swal2-show');
     let visible = false;
     try {
-      await swal.waitFor({ state: 'visible', timeout: Math.min(timeout, 10000) });
+      await swal.waitFor({ state: 'visible', timeout: Math.min(timeout, 6000) });
       visible = true;
     } catch {
       // Fallback: .swal2-popup sin .swal2-show
       swal = page.locator('.swal2-popup');
       try {
-        await swal.waitFor({ state: 'visible', timeout: Math.min(timeout, 10000) });
+        await swal.waitFor({ state: 'visible', timeout: Math.min(timeout, 6000) });
         visible = true;
       } catch {
         // No apareció SweetAlert con ningún selector
@@ -249,23 +271,23 @@ async function manejarSweetAlert(page, textoBoton = 'Continuar', timeout = 20000
 
     if (!visible) return false;
 
-    await pausa(page, 400, 800);
+    await pausa(page, 100, 200);
 
     // Buscar botón por texto
     const btn = swal.locator('button').filter({ hasText: textoBoton }).first();
     if (await btn.count()) {
-      await pausa(page, 300, 600);
+      await pausa(page, 80, 150);
       await btn.click();
-      await pausa(page, 900, 1600);
+      await pausa(page, 250, 450);
       return true;
     }
 
     // Fallback: cualquier button.confirm o button:first-of-type
     const btnFallback = swal.locator('button.swal2-confirm, button:first-of-type').first();
     if (await btnFallback.count()) {
-      await pausa(page, 300, 600);
+      await pausa(page, 80, 150);
       await btnFallback.click();
-      await pausa(page, 900, 1600);
+      await pausa(page, 250, 450);
       return true;
     }
 
@@ -277,11 +299,19 @@ async function manejarSweetAlert(page, textoBoton = 'Continuar', timeout = 20000
 
 /**
  * Cierra SweetAlerts inesperados que bloquean la interfaz.
- * Útil antes de interactuar con selects o entre pasos.
+ * Verifica rápidamente si existe uno visible antes de intentar cerrarlo.
  */
 async function cerrarSweetAlertsInesperados(page) {
   try {
-    await manejarSweetAlert(page, 'Aceptar', 3000);
+    const existe = await page.evaluate(() => {
+      const popup = document.querySelector('.swal2-popup');
+      if (!popup) return false;
+      const style = window.getComputedStyle(popup);
+      return style.display !== 'none' && parseFloat(style.opacity) > 0;
+    });
+    if (existe) {
+      await manejarSweetAlert(page, 'Aceptar', 2000);
+    }
   } catch (_) {
     // Ignorar si no hay SweetAlert
   }
@@ -305,25 +335,25 @@ async function esperarNombreSolicitante(page) {
 async function dispararConsultaNit(page) {
   const inputDocumento = page.locator('[formcontrolname="formNumDocumento"]').first();
   const nombreInput = page.locator('[formcontrolname="formNombreSolicitante"]').first();
-  await pausa(page, 300, 600);
+  await pausa(page, 200, 400);
 
   // Estrategia 1: Tab
   await inputDocumento.press('Tab');
-  await pausa(page, 700, 1400);
+  await pausa(page, 500, 900);
   let nombre = await nombreInput.inputValue().catch(() => '');
   if (nombre && nombre.trim()) return nombre;
 
   // Estrategia 2: click fuera
   await page.mouse.click(80, 80);
-  await pausa(page, 800, 1500);
+  await pausa(page, 600, 1000);
   nombre = await nombreInput.inputValue().catch(() => '');
   if (nombre && nombre.trim()) return nombre;
 
   // Estrategia 3: Tab otra vez
   await inputDocumento.click();
-  await pausa(page, 300, 500);
+  await pausa(page, 200, 400);
   await inputDocumento.press('Tab');
-  await pausa(page, 1000, 1800);
+  await pausa(page, 700, 1200);
   nombre = await nombreInput.inputValue().catch(() => '');
   return nombre;
 }
@@ -384,18 +414,18 @@ async function diligenciarFecha(page, fecha) {
     if (isReadonly === 'true' || isReadonly === '') {
       // Campo readonly → abrir datepicker con click y escribir en el popup
       await input.click();
-      await pausa(page, 500, 1000);
+      await pausa(page, 300, 600);
 
       // Buscar el input del datepicker popup que suele aparecer
       const popupInput = page.locator('mat-datepicker-content input, .mat-datepicker-content input').first();
       try {
-        await popupInput.waitFor({ state: 'visible', timeout: 8000 });
+        await popupInput.waitFor({ state: 'visible', timeout: 5000 });
         await popupInput.fill('');
-        await popupInput.type(fechaFormateada, { delay: 50 });
-        await pausa(page, 300, 600);
+        await popupInput.type(fechaFormateada, { delay: 30 });
+        await pausa(page, 200, 400);
         // Cerrar el popup con Tab o click fuera
         await input.press('Tab');
-        await pausa(page, 400, 800);
+        await pausa(page, 250, 500);
         console.log(`[scraper] Fecha liquidación OK (readonly): ${fechaFormateada} (selector: ${selector})`);
         return;
       } catch {
@@ -408,7 +438,7 @@ async function diligenciarFecha(page, fecha) {
       // Campo editable → usar fill directo
       await input.fill('');
       await input.fill(fechaFormateada);
-      await pausa(page, 300, 600);
+      await pausa(page, 200, 400);
       console.log(`[scraper] Fecha liquidación OK: ${fechaFormateada} (selector: ${selector})`);
       return;
     }
@@ -424,10 +454,10 @@ async function seleccionarRegistroRNA(page) {
   // Puede que ya esté preseleccionado (readonly), lo intentamos por si acaso
   try {
     await seleccionarOpcionMatSelect(page, '[formcontrolname="formRegistro"]', 'RNA');
-    await pausa(page, 700, 1400);
+    await pausa(page, 400, 800);
   } catch {
     // Si falla, probablemente ya está en RNA
-    await pausa(page, 300, 600);
+    await pausa(page, 200, 400);
   }
 }
 
@@ -451,19 +481,19 @@ async function procesarPlaca(page, placa) {
 
   // ── Digitación 1 ──
   await escribirLento(inputPlaca, placaNormalizada);
-  await pausa(page, 300, 600);
+  await pausa(page, 200, 400);
   await inputPlaca.press('Tab');
-  await pausa(page, 700, 1400);
+  await pausa(page, 500, 900);
 
   // ── Digitación 2 (confirmación RUNT) ──
   await inputPlaca.click();
-  await pausa(page, 200, 500);
+  await pausa(page, 150, 300);
   await inputPlaca.fill('');
-  await pausa(page, 200, 500);
+  await pausa(page, 150, 300);
   await escribirLento(inputPlaca, placaNormalizada);
-  await pausa(page, 300, 600);
+  await pausa(page, 200, 400);
   await inputPlaca.press('Tab');
-  await pausa(page, 900, 1600);
+  await pausa(page, 600, 1000);
 
   // Validar ng-valid
   await esperarNgValid(page, '[formcontrolname="formNroPlaca"]', 15000);
@@ -479,7 +509,7 @@ async function seleccionarTramite(page, tramite) {
   const valor = normalizarTexto(tramite);
   if (!valor) throw new Error('El trámite es obligatorio');
   await seleccionarOpcionMatSelect(page, '[formcontrolname="formTramite"]', valor);
-  await pausa(page, 700, 1400);
+  await pausa(page, 400, 800);
   return valor;
 }
 
@@ -496,7 +526,7 @@ async function seleccionarClasificacion(page, clasificacion) {
   if (!existe) return null;
 
   await seleccionarOpcionMatSelect(page, '[formcontrolname="formClasificacion"]', valor);
-  await pausa(page, 700, 1400);
+  await pausa(page, 400, 800);
   return valor;
 }
 
@@ -517,12 +547,12 @@ async function resolverTarifa(page, tramite, clasificacion) {
     // No hay SweetAlert — la tarifa se coloca automáticamente abajo al seleccionar la clasificación.
     // Solo esperamos que Angular procese y seguimos para que Generar funcione.
     console.log('[scraper] MEDIDAS CAUTELARES: tarifa automática, sin SweetAlert');
-    await pausa(page, 3000, 5000);
+    await pausa(page, 1500, 2500);
     return { tipo: 'auto', tarifa: null, descripcion: 'Tarifa automática MEDIDAS CAUTELARES' };
   }
 
   // ── Para otras clasificaciones: esperar a que Angular procese ──
-  await pausa(page, 1200, 2000);
+  await pausa(page, 700, 1200);
 
   // ── Tarifa vía mat-select ──
   const selectTarifa = page.locator('[formcontrolname="formTarifaAplicar"]').first();
@@ -546,7 +576,7 @@ async function resolverTarifa(page, tramite, clasificacion) {
   }
 
   await seleccionarOpcionMatSelect(page, '[formcontrolname="formTarifaAplicar"]', opcionTexto);
-  await pausa(page, 900, 1600);
+  await pausa(page, 400, 800);
 
   return { tipo: 'select', tarifa: opcionTexto, descripcion: opcionTexto };
 }
@@ -619,7 +649,7 @@ async function generarYCapturarPDF(page) {
     throw new Error('El botón Generar está deshabilitado. Verifique los campos obligatorios.');
   }
 
-  await pausa(page, 600, 1200);
+  await pausa(page, 400, 700);
 
   // Interceptar la respuesta de la API REST (el PDF viene como base64 en el JSON)
   const responsePromise = page.waitForResponse(
@@ -628,7 +658,7 @@ async function generarYCapturarPDF(page) {
   );
 
   await boton.click();
-  await pausa(page, 800, 1500);
+  await pausa(page, 500, 900);
 
   const response = await responsePromise;
   const data = await response.json();
@@ -670,7 +700,19 @@ async function generarYCapturarPDF(page) {
 // ─────────────────────────────────────────────
 
 async function aceptarSweetAlertExito(page) {
-  await manejarSweetAlert(page, 'Aceptar', 15000);
+  const inicio = Date.now();
+  try {
+    // Versión rápida para el SweetAlert de éxito final
+    const btn = page.locator('.swal2-popup.swal2-show button.swal2-confirm, .swal2-popup button.swal2-confirm').first();
+    await btn.waitFor({ state: 'visible', timeout: 4000 });
+    await btn.evaluate(el => el.click());
+    await pausa(page, 100, 200);
+    const duracion = Date.now() - inicio;
+    console.log(`[scraper] [TIME] aceptarSweetAlertExito | ${duracion}ms`);
+  } catch {
+    // Fallback al manejador general si no aparece rápido
+    await manejarSweetAlert(page, 'Aceptar', 8000);
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -687,7 +729,7 @@ async function prepararPagina(page) {
   }
   await page.waitForLoadState('networkidle').catch(() => {});
   await cerrarSweetAlertsInesperados(page);
-  await pausa(page, 1500, 2500);
+  await pausa(page, 800, 1300);
 }
 
 // ─────────────────────────────────────────────
@@ -785,7 +827,7 @@ async function scrapeLiquidacionTramite({
         // La clasificación ya está seleccionada del trámite anterior
         clasificacionSeleccionada = primeraClasificacion;
         console.log(`[scraper] Clasificación ya seleccionada: ${clasificacionSeleccionada}`);
-        await medirTiempo('Pausa clasificación ya seleccionada', async () => { await pausa(page, 600, 1200); });
+        await pausa(page, 300, 600);
       }
 
       // ── 4c) Tarifa automática (según combo trámite + clasificación) ──
@@ -799,20 +841,20 @@ async function scrapeLiquidacionTramite({
       });
 
       // Pausa entre trámites para que Angular procese la tabla
-      await pausa(page, 900, 1800);
+      await pausa(page, 500, 900);
       await cerrarSweetAlertsInesperados(page);
     }
 
     // ── 5) Leer tabla de trámites (con retry para MEDIDAS CAUTELARES) ──
     let tramitesTabla = await medirTiempo('Leer tabla de trámites', async () => {
-      await pausa(page, 1200, 2000);
+      await pausa(page, 700, 1200);
       let tabla = await leerTablaTramites(page);
       console.log('[scraper] Tabla filas:', tabla.length);
 
       // Si la tabla está vacía y es MEDIDAS CAUTELARES, esperar más (Angular tarda en auto-colocar tarifa)
       if (tabla.length === 0 && primeraClasificacion && primeraClasificacion.includes('MEDIDAS CAUTELARES')) {
         console.log('[scraper] Tabla vacía con MEDIDAS CAUTELARES — esperando más tiempo para que Angular procese...');
-        await pausa(page, 4000, 6000);
+        await pausa(page, 2500, 4000);
         tabla = await leerTablaTramites(page);
         console.log('[scraper] Tabla filas (retry):', tabla.length);
       }
