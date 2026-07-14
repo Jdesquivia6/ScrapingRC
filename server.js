@@ -1,6 +1,5 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 
 // const civitransRoutes = require('./routes/civitrans.routes');
 const civitransRoutes = require('./routes/runt.routes')

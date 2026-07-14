@@ -21,6 +21,23 @@ if not exist "%BACKEND_DIR%" (
     exit /b 1
 )
 
+:: Verificar que node y npm esten disponibles
+where node >nul 2>nul
+if "%ERRORLEVEL%"=="1" (
+    echo ERROR: No se encontro Node.js en el PATH.
+    echo Instala Node.js o agregalo al PATH.
+    pause
+    exit /b 1
+)
+
+where npm >nul 2>nul
+if "%ERRORLEVEL%"=="1" (
+    echo ERROR: No se encontro npm en el PATH.
+    echo Instala Node.js o agregalo al PATH.
+    pause
+    exit /b 1
+)
+
 :: Verificar si Chrome ya esta corriendo
 tasklist /FI "IMAGENAME eq chrome.exe" 2>NUL | find /I "chrome.exe" >NUL
 if "%ERRORLEVEL%"=="0" (
@@ -33,12 +50,12 @@ if "%ERRORLEVEL%"=="0" (
 
 :: Iniciar backend
 echo Iniciando backend...
-start "Backend - ScrapingRC" /d "%BACKEND_DIR%" cmd /k node server.js
-timeout /t 3 /nobreak >nul
+start "Backend - ScrapingRC" /d "%BACKEND_DIR%" cmd /k npm run start
+timeout /t 4 /nobreak >nul
 
 :: Iniciar worker
 echo Iniciando worker...
-start "Worker - ScrapingRC" /d "%BACKEND_DIR%" cmd /k node scripts/worker.local.js
+start "Worker - ScrapingRC" /d "%BACKEND_DIR%" cmd /k npm run worker:local
 timeout /t 2 /nobreak >nul
 
 :: Iniciar Chrome
