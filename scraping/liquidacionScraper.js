@@ -506,14 +506,14 @@ async function procesarPlaca(page, placa) {
   await pausa(page, 200, 350);
 
   // ── Digitación 2 (confirmación RUNT) ──
-  await inputPlaca.click();
-  await pausa(page, 80, 150);
-  await inputPlaca.fill('');
-  await pausa(page, 80, 150);
   await escribirLento(inputPlaca, placaNormalizada);
   await pausa(page, 80, 150);
   await inputPlaca.press('Tab');
   await pausa(page, 250, 400);
+
+  // Log de diagnóstico
+  const valorFinal = await inputPlaca.inputValue().catch(() => '');
+  console.log(`[scraper] Placa digitada: "${valorFinal}"`);
 
   // Validar ng-valid
   await esperarNgValid(page, '[formcontrolname="formNroPlaca"]', 8000);
