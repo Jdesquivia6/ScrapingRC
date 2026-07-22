@@ -1,36 +1,22 @@
-const pool = require('./db');
-
 const SESSION_DURATION_MINUTES = 60;
 const SAFETY_MARGIN_MINUTES = 10;
 const MINUTES_PER_PLATE = 1.2;
 
 // ============================================
-// FUNCIONES DE BASE DE DATOS
+// SESIÓN LOCAL POR INSTANCIA DE BACKEND
 // ============================================
+// Cada PC que corre su propio backend tiene su propia sesión RUNT en memoria.
+// Esto evita que varias PCs compartan la misma sesión en la base de datos.
+
+let sesionLocal = null;
 
 async function obtenerSesionDB() {
-  try {
-    const result = await pool.query(
-      'SELECT session_started_at FROM runt_sesion ORDER BY id DESC LIMIT 1'
-    );
-    return result.rows[0]?.session_started_at || null;
-  } catch (error) {
-    console.error('[runtSession] Error consultando sesión en DB:', error.message);
-    return null;
-  }
+  return sesionLocal;
 }
 
 async function guardarSesionDB(sessionStartedAt) {
-  try {
-    await pool.query(
-      'INSERT INTO runt_sesion (session_started_at) VALUES ($1)',
-      [sessionStartedAt]
-    );
-    return true;
-  } catch (error) {
-    console.error('[runtSession] Error guardando sesión en DB:', error.message);
-    return false;
-  }
+  sesionLocal = sessionStartedAt;
+  return true;
 }
 
 // ============================================
