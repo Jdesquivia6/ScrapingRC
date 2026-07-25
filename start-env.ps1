@@ -46,7 +46,7 @@ Start-Sleep -Seconds 2
 
 # Iniciar Chrome
 Log "Iniciando Chrome"
-$chromeProc = Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList "--remote-debugging-port=9222", "--user-data-dir=C:\chrome-autocore", "--start-maximized", "--disable-features=PrivateNetworkAccess" -PassThru
+$chromeProc = Start-Process -FilePath "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList "--remote-debugging-port=9222", "--user-data-dir=C:\chrome-autocore", "--start-maximized" -PassThru
 $chromeProc.Id | Out-File "$backendDir\chrome.pid" -Encoding ASCII -NoNewline
 Log "Chrome PID: $($chromeProc.Id)"
 
