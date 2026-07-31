@@ -33,6 +33,7 @@ const MODULES = new Set([
   'personas-direcciones',
   'liquidaciones',
   'liquidacion',
+  'liquidaciones_personalizadas',
   'ubicabilidad-personas'
 ]);
 

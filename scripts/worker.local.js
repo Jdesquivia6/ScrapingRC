@@ -14,7 +14,7 @@ const TOKEN = process.env.WORKER_TOKEN || '';
 const WORKER_EMAIL = process.env.WORKER_EMAIL || '';
 const WORKER_PASSWORD = process.env.WORKER_PASSWORD || '';
 const WORKER_NAME = process.env.WORKER_NAME || 'PC-LOCAL';
-const MODULES = (process.env.WORKER_MODULES || 'consulta-placa,datos-vehiculo,personas-direcciones,ubicabilidad-personas,liquidaciones')
+const MODULES = (process.env.WORKER_MODULES || 'consulta-placa,datos-vehiculo,personas-direcciones,ubicabilidad-personas,liquidaciones,liquidaciones_personalizadas')
   .split(',')
   .map((m) => m.trim())
   .filter(Boolean);
@@ -334,6 +334,52 @@ async function resolverItem(modulo, payload) {
         return {
           estado: 'fallido',
           error: result.error || `Fallo ${modulo}`,
+          resultado: result
+        };
+      }
+
+      return {
+        estado: 'exitoso',
+        resultado: result
+      };
+    } catch (error) {
+      return {
+        estado: 'fallido',
+        error: `Error scraping local: ${error.message}`
+      };
+    }
+  }
+
+  if (modulo === 'liquidaciones_personalizadas') {
+    try {
+      console.log(`[worker] Consultando liquidacion personalizada...`);
+
+      let payloadAdaptado;
+      if (payload.tramites && Array.isArray(payload.tramites)) {
+        payloadAdaptado = payload;
+      } else if (payload.tramite) {
+        payloadAdaptado = {
+          tipoDocumento: payload.tipoDocumento,
+          numeroDocumento: payload.numeroDocumento,
+          placa: payload.placa,
+          tramites: [{
+            tramite: payload.tramite,
+            clasificacion: payload.clasificacion || ''
+          }]
+        };
+      } else {
+        return {
+          estado: 'fallido',
+          error: 'Payload no válido: se espera "tramites" array o "tramite" individual'
+        };
+      }
+
+      const result = await scrapeLiquidacionTramite(payloadAdaptado);
+
+      if (!result.ok) {
+        return {
+          estado: 'fallido',
+          error: result.error || 'Fallo liquidaciones personalizadas',
           resultado: result
         };
       }

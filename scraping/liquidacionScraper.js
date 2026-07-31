@@ -372,26 +372,38 @@ async function dispararConsultaNit(page) {
   return nombre;
 }
 
-async function diligenciarSolicitante(page) {
+async function diligenciarSolicitante(page, solicitante = {}) {
+  const tipoDocumento = solicitante.tipoDocumento || SOLICITANTE_TIPO_DOCUMENTO;
+  const numeroDocumento = solicitante.numeroDocumento || SOLICITANTE_NUMERO_DOCUMENTO;
+
+  // Limpiar SweetAlerts residuales antes de empezar
+  await cerrarSweetAlertsInesperados(page);
+
   await seleccionarOpcionMatSelect(
     page,
     '[formcontrolname="formTipoDocumento"]',
-    SOLICITANTE_TIPO_DOCUMENTO
+    tipoDocumento
   );
-  await pausa(page, 400, 800);
+  await pausa(page, 300, 600);
 
   const numeroInput = page.locator('[formcontrolname="formNumDocumento"]').first();
-  await escribirLento(numeroInput, SOLICITANTE_NUMERO_DOCUMENTO);
+  await escribirLento(numeroInput, numeroDocumento);
 
   const nombreDetectado = await dispararConsultaNit(page);
+
+  // Si RUNT mostró un SweetAlert de error, aceptarlo y lanzar error controlado
   if (!nombreDetectado || !nombreDetectado.trim()) {
+    const alertaManejada = await manejarSweetAlert(page, 'Aceptar', 5000);
+    if (alertaManejada) {
+      throw new Error(`El documento ${tipoDocumento} ${numeroDocumento} no fue encontrado en RUNT`);
+    }
     throw new Error('No fue posible cargar automáticamente el nombre del solicitante');
   }
 
   const nombreSolicitante = await esperarNombreSolicitante(page);
   return {
-    tipoDocumentoSolicitante: SOLICITANTE_TIPO_DOCUMENTO,
-    numeroDocumentoSolicitante: SOLICITANTE_NUMERO_DOCUMENTO,
+    tipoDocumentoSolicitante: tipoDocumento,
+    numeroDocumentoSolicitante: numeroDocumento,
     nombreSolicitante: nombreSolicitante.trim()
   };
 }
@@ -786,7 +798,9 @@ async function scrapeLiquidacionTramite({
   placa,
   tramites,  // Array de {tramite, clasificacion}
   fechaLiquidacion,  // Fecha en formato YYYY-MM-DD (opcional)
-  ...rest   // Ignoramos tipoDocumento, numeroDocumento, tarifa
+  tipoDocumento,
+  numeroDocumento,
+  ...rest   // Ignoramos tarifa y otros
 }) {
   let page = null;
 
@@ -809,7 +823,9 @@ async function scrapeLiquidacionTramite({
     console.log('[scraper] Página cargada');
 
     // ── 1) Solicitante ──
-    const datosSolicitante = await medirTiempo('Diligenciar solicitante', () => diligenciarSolicitante(page));
+    const datosSolicitante = await medirTiempo('Diligenciar solicitante', () =>
+      diligenciarSolicitante(page, { tipoDocumento, numeroDocumento })
+    );
     console.log('[scraper] Solicitante OK:', datosSolicitante.nombreSolicitante);
 
     // ── 1b) Fecha liquidación ──
