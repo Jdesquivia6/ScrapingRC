@@ -46,6 +46,59 @@ function normalizarMayus(valor) {
   return normalizarTexto(valor).toUpperCase();
 }
 
+function homologarTipoDocumento(tipoDocumento) {
+  const tipo = String(tipoDocumento || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, ' ');
+
+  const mapa = {
+    'CARNÉ DIPLOMÁTICO': 'Carnet Diplomático',
+    'CARNET DIPLOMÁTICO': 'Carnet Diplomático',
+    'CARNÉ DIPLOMATICO': 'Carnet Diplomático',
+    'CARNET DIPLOMATICO': 'Carnet Diplomático',
+    'DIPLOMÁTICO': 'Carnet Diplomático',
+    'DIPLOMATICO': 'Carnet Diplomático',
+    'CC': 'Cédula Ciudadanía',
+    'C.C': 'Cédula Ciudadanía',
+    'C.C.': 'Cédula Ciudadanía',
+    'CÉDULA': 'Cédula Ciudadanía',
+    'CEDULA': 'Cédula Ciudadanía',
+    'CÉDULA DE CIUDADANÍA': 'Cédula Ciudadanía',
+    'CEDULA DE CIUDADANIA': 'Cédula Ciudadanía',
+    'CÉDULA DE CIUDADANIA': 'Cédula Ciudadanía',
+    'CÉDULA CIUDADANÍA': 'Cédula Ciudadanía',
+    'CEDULA CIUDADANIA': 'Cédula Ciudadanía',
+    'CÉDULA ECUATORIANA': 'Cédula Ecuatoriana',
+    'CEDULA ECUATORIANA': 'Cédula Ecuatoriana',
+    'CÉDULA VENEZOLANA': 'Cédula Venezolana',
+    'CEDULA VENEZOLANA': 'Cédula Venezolana',
+    'CE': 'Cédula de Extranjería',
+    'C.E': 'Cédula de Extranjería',
+    'C.E.': 'Cédula de Extranjería',
+    'CÉDULA EXTRANJERÍA': 'Cédula de Extranjería',
+    'CEDULA EXTRANJERIA': 'Cédula de Extranjería',
+    'CÉDULA DE EXTRANJERÍA': 'Cédula de Extranjería',
+    'CEDULA DE EXTRANJERIA': 'Cédula de Extranjería',
+    'NIT': 'NIT',
+    'PA': 'Pasaporte',
+    'PAS': 'Pasaporte',
+    'PASAPORTE': 'Pasaporte',
+    'PPT': 'Permiso por Protección Temporal',
+    'P.P.T': 'Permiso por Protección Temporal',
+    'P.P.T.': 'Permiso por Protección Temporal',
+    'PERMISO POR PROTECCIÓN TEMPORAL': 'Permiso por Protección Temporal',
+    'PERMISO POR PROTECCION TEMPORAL': 'Permiso por Protección Temporal',
+    'REGISTRO CIVIL': 'Registro Civil',
+    'TI': 'Tarjeta de Identidad',
+    'TI2': 'TI2',
+    'TARJETA IDENTIDAD': 'Tarjeta de Identidad',
+    'TARJETA DE IDENTIDAD': 'Tarjeta de Identidad'
+  };
+
+  return mapa[tipo] || tipoDocumento;
+}
+
 function random(min = 600, max = 1400) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -373,7 +426,7 @@ async function dispararConsultaNit(page) {
 }
 
 async function diligenciarSolicitante(page, solicitante = {}) {
-  const tipoDocumento = solicitante.tipoDocumento || SOLICITANTE_TIPO_DOCUMENTO;
+  const tipoDocumento = homologarTipoDocumento(solicitante.tipoDocumento) || SOLICITANTE_TIPO_DOCUMENTO;
   const numeroDocumento = solicitante.numeroDocumento || SOLICITANTE_NUMERO_DOCUMENTO;
 
   // Limpiar SweetAlerts residuales antes de empezar
