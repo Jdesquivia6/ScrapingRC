@@ -16,6 +16,7 @@ const {
   actualizarEstadoJobWorker,
   workerHeartbeat,
   guardarResultadoScraping,
+  exportarJobExcel,
   reintentarEnviosPersonasPendientes
 } = require('../controllers/workerJobs.controller');
 
@@ -24,6 +25,7 @@ router.get('/catalogos/estados', verifyToken, catalogoEstados);
 router.post('/', verifyToken, crearJob);
 router.get('/', verifyToken, listarJobs);
 router.get('/:id', verifyToken, obtenerDetalleJob);
+router.get('/:id/exportar-excel', verifyToken, exportarJobExcel);
 
 router.post('/:id/cancelar', verifyToken, cancelarJob);
 router.post('/:id/reintentar-fallidos', verifyToken, reintentarFallidos);

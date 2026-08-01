@@ -2,6 +2,7 @@ const pool = require('../utils/db');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const ExcelJS = require('exceljs');
 const { obtenerEstadoSesionRunt } = require('../utils/runtSession');
 const { API_HIKVISION } = require('../config');
 
@@ -405,6 +406,115 @@ exports.obtenerDetalleJob = async (req, res) => {
       ok: false,
       error: error.message
     });
+  }
+};
+
+exports.exportarJobExcel = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const jobResult = await pool.query(`
+      SELECT *
+      FROM worker_jobs
+      WHERE id_job = $1
+    `, [id]);
+
+    if (jobResult.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: 'Job no encontrado' });
+    }
+
+    const job = jobResult.rows[0];
+
+    if (req.user.rol !== 'administrador' && String(job.fk_usuario) !== String(req.user.id_usuario)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'No tienes permisos para exportar este job'
+      });
+    }
+
+    if (!['personas-direcciones', 'ubicabilidad-personas'].includes(job.modulo)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Este módulo no soporta exportación por job'
+      });
+    }
+
+    const itemsResult = await pool.query(`
+      SELECT numero_documento
+      FROM worker_job_items
+      WHERE fk_job = $1
+    `, [id]);
+
+    const documentos = itemsResult.rows
+      .map(r => r.numero_documento)
+      .filter(Boolean);
+
+    if (documentos.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: 'El job no tiene documentos para exportar'
+      });
+    }
+
+    const result = await pool.query(`
+      SELECT DISTINCT ON (p.numero_documento)
+        p.tipo_documento,
+        p.numero_documento,
+        p.nombres,
+        p.apellidos,
+        p.celular,
+        p.correo,
+        p.direccion_consultada,
+        p.direccion_encontrada,
+        p.error_consulta_direccion,
+        p.fecha_consulta_direccion,
+        p.fecha_actualizacion,
+        cp.placa,
+        d.direccion,
+        d.municio_departamento,
+        d.telefono,
+        d.tipo_direccion
+      FROM persona_natural_propietario p
+      LEFT JOIN direcciones d
+        ON d.id_direcciones = p.fk_direcciones
+      LEFT JOIN consultas_placas cp
+        ON cp.id_consul_placa = p.fk_consul_placa
+      WHERE p.numero_documento = ANY($1::text[])
+      ORDER BY p.numero_documento, COALESCE(p.fecha_consulta_direccion, p.fecha_actualizacion) DESC
+    `, [documentos]);
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Job');
+
+    sheet.columns = [
+      { header: 'Tipo Documento', key: 'tipo_documento', width: 22 },
+      { header: 'Número Documento', key: 'numero_documento', width: 22 },
+      { header: 'Nombres', key: 'nombres', width: 25 },
+      { header: 'Apellidos', key: 'apellidos', width: 25 },
+      { header: 'Celular', key: 'celular', width: 18 },
+      { header: 'Correo', key: 'correo', width: 30 },
+      { header: 'Dirección', key: 'direccion', width: 40 },
+      { header: 'Municipio / Departamento', key: 'municio_departamento', width: 30 },
+      { header: 'Teléfono', key: 'telefono', width: 18 },
+      { header: 'Tipo Dirección', key: 'tipo_direccion', width: 20 },
+      { header: 'Fecha Consulta', key: 'fecha_consulta_direccion', width: 22 }
+    ];
+
+    result.rows.forEach(row => sheet.addRow(row));
+    sheet.getRow(1).font = { bold: true };
+    sheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+    sheet.autoFilter = { from: 'A1', to: 'K1' };
+
+    const fecha = new Date().toISOString().slice(0, 10);
+    const fileName = `job_${job.modulo}_${fecha}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
   }
 };
 
