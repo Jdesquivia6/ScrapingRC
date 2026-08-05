@@ -175,7 +175,7 @@ async function scrollArriba(page) {
     window.scrollTo(0, 0);
   }).catch(() => {});
 
-  await delay(page, 400, 900);
+  await delay(page, 250, 550);
 }
 
 async function scrollFuerteHastaAbajo(page) {
@@ -202,10 +202,10 @@ async function scrollFuerteHastaAbajo(page) {
   }).catch(() => {});
 
   await page.mouse.wheel(0, 5000).catch(() => {});
-  await delay(page, 800, 1400);
+  await delay(page, 500, 900);
 
   await page.mouse.wheel(0, 5000).catch(() => {});
-  await delay(page, 800, 1400);
+  await delay(page, 500, 900);
 }
 
 async function prepararCapturaSinRomperPantalla(page) {
@@ -216,7 +216,7 @@ async function prepararCapturaSinRomperPantalla(page) {
   // Baja para obligar a Angular/RUNT a renderizar la tabla inferior.
   await scrollFuerteHastaAbajo(page);
 
-  await delay(page, 800, 1400);
+  await delay(page, 500, 900);
 
   // Regresa arriba antes del fullPage.
   await scrollArriba(page);
@@ -275,7 +275,7 @@ function respuestaSesionVencida(documento) {
 
 async function cerrarOverlays(page) {
   await page.keyboard.press('Escape').catch(() => {});
-  await delay(page, 300, 700);
+  await delay(page, 200, 450);
 
   await page.evaluate(() => {
     document
@@ -297,7 +297,7 @@ async function humanClearAndType(page, selector, value) {
   await cerrarOverlays(page);
 
   await input.scrollIntoViewIfNeeded();
-  await delay(page, 300, 700);
+  await delay(page, 200, 450);
 
   try {
     await input.click({ force: true, timeout: 5000 });
@@ -307,7 +307,7 @@ async function humanClearAndType(page, selector, value) {
 
     for (const ch of String(value)) {
       await input.type(ch, {
-        delay: random(80, 150)
+        delay: random(40, 80)
       });
     }
 
@@ -324,7 +324,7 @@ async function humanClearAndType(page, selector, value) {
     }, String(value));
   }
 
-  await delay(page, 500, 1200);
+  await delay(page, 300, 700);
 }
 
 async function openTipoDocumentoSelect(page) {
@@ -350,7 +350,7 @@ async function selectTipoDocumento(page, tipoDocumento) {
 
   await openTipoDocumentoSelect(page);
 
-  await delay(page, 400, 1200);
+  await delay(page, 250, 700);
 
   const opcion = page.locator('mat-option .mat-option-text', {
     hasText: tipoNormalizado
@@ -365,7 +365,7 @@ async function selectTipoDocumento(page, tipoDocumento) {
 
   console.log(`✅ Tipo de documento seleccionado: ${tipoNormalizado}`);
 
-  await delay(page, 800, 1800);
+  await delay(page, 500, 1100);
 }
 
 async function clickBuscar(page) {
@@ -386,7 +386,7 @@ async function clickBuscar(page) {
     throw new Error('El botón Buscar está deshabilitado');
   }
 
-  await delay(page, 500, 1200);
+  await delay(page, 300, 700);
 
   await boton.click({ force: true });
 
@@ -428,11 +428,11 @@ async function aceptarAlertaSiExiste(page) {
       timeout: 5000
     });
 
-    await delay(page, 500, 900);
+    await delay(page, 300, 600);
 
     await btnAceptar.click({ force: true });
 
-    await delay(page, 1200, 2000);
+    await delay(page, 700, 1200);
 
     console.log('⚠️ Alerta aceptada:', texto);
 
@@ -521,7 +521,7 @@ async function prepararFormulario(page, tipoDocumento) {
     throw new Error('Sesión RUNT vencida');
   }
 
-  await delay(page, 1800, 3200);
+  await delay(page, 1000, 1800);
 
   await selectTipoDocumento(page, tipoDocumento);
 }
@@ -753,7 +753,7 @@ exports.scrapeDireccionesPN = async ({
       return respuestaSesionVencida(documento);
     }
 
-    await medirTiempo('Espera post-búsqueda (delay 1.8-3s)', () => delay(page, 1800, 3000));
+    await medirTiempo('Espera post-búsqueda', () => delay(page, 1000, 1800));
 
     const textoAlerta = await aceptarAlertaSiExiste(page);
 
@@ -800,7 +800,12 @@ exports.scrapeDireccionesPN = async ({
 
     console.log('✅ JSON direcciones PN capturado');
 
-    await medirTiempo('Espera pre-screenshot (delay 1.8-3.2s)', () => delay(page, 1800, 3200));
+    // [SCREENSHOT DESHABILITADO] Se comenta para reducir latencia ~60% por documento
+    // (el screenshot tomaba 4-34s dependiendo de la carga de RUNT, y solo se imprimía
+    //  en consola — no se guarda en DB ni se muestra al usuario).
+    // Si en el futuro se necesita reactivar, descomentar el bloque siguiente.
+    /*
+    await medirTiempo('Espera pre-screenshot', () => delay(page, 800, 1500));
 
     const screenshotsDir = path.join(__dirname, '../screenshots');
 
@@ -814,6 +819,7 @@ exports.scrapeDireccionesPN = async ({
         return null;
       })
     );
+    */
 
     // NO guardar aquí - el worker centraliza el guardado en DB via guardar-resultado
     // El guardado en DB se hace en el worker via guardarResultadoScraping
@@ -828,7 +834,7 @@ exports.scrapeDireccionesPN = async ({
       direcciones: items,
       totalDirecciones: items.length,
       data: items,
-      screenshotPath,
+      screenshotPath: null,
       message: 'Consulta ejecutada correctamente'
     };
 
@@ -836,6 +842,8 @@ exports.scrapeDireccionesPN = async ({
     const totalMs = Date.now() - inicioDoc;
     console.error(`❌ Error direcciones PN: ${error.message} | ${totalMs}ms (${(totalMs / 1000).toFixed(1)}s)`);
 
+    // [SCREENSHOT DE ERROR DESHABILITADO] Se comenta por la misma razón que el de éxito
+    /*
     const screenshotsDir = path.join(__dirname, '../screenshots');
 
     const screenshotPath = await takeScreenshot(
@@ -843,13 +851,14 @@ exports.scrapeDireccionesPN = async ({
       screenshotsDir,
       `runt-direcciones-${documento}-error.png`
     ).catch(() => null);
+    */
 
     return {
       ok: false,
       tipoDocumento,
       numeroDocumento: documento,
       error: error.message,
-      screenshotPath
+      screenshotPath: null
     };
   }
 };
