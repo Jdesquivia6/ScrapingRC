@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 
 // Scrapers locales (el worker tiene el huellero USB conectado)
-const { scrapeVehiculo } = require('../scraping/vehiculoScraper');
+const { scrapeVehiculo, scrapeVehiculoBatch } = require('../scraping/vehiculoScraper');
 const { scrapeDatosVehiculo } = require('../scraping/datosVehiculoScraper');
 const { scrapeDireccionesPN } = require('../scraping/runtScraper');
 const { scrapeLiquidacionTramite } = require('../scraping/liquidacionScraper');
@@ -249,6 +249,16 @@ async function resolverItem(modulo, payload) {
         };
       }
 
+      // Si la placa no existe, RUNT responde ok pero sin datos del propietario
+      const tieneDatos = result.numero_identificacion_propietario || result.nombre_razon_social_propietario;
+      if (!tieneDatos) {
+        console.log(`[worker] Placa ${result.placa}: sin información (propietario nulo)`);
+        return {
+          estado: 'sin_informacion',
+          resultado: result
+        };
+      }
+
       return {
         estado: 'exitoso',
         resultado: result
@@ -448,7 +458,85 @@ async function resolverItem(modulo, payload) {
   };
 }
 
+// ─────────────────────────────────────────────
+// BATCH: reuso de pestaña para consulta-placa
+// ─────────────────────────────────────────────
+
+async function procesarJobBatch(job, items) {
+  try {
+    const placaItems = items.map(item => ({
+      placa: item.payload?.placa,
+      id_item: item.id_item
+    }));
+
+    console.log(`[worker] BATCH consulta-placa: ${placaItems.length} placas, reusando pestaña...`);
+    const batchResults = await scrapeVehiculoBatch({ placaItems });
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const batchResult = batchResults[i];
+
+      try {
+        await setItemEstado(job.id_job, item.id_item, 'procesando');
+      } catch (err) {
+        const st = err?.response?.status;
+        const msg = err?.response?.data?.error || err.message;
+        console.error(`[${new Date().toISOString()}] Error setItemEstado item ${item.id_item}: status=${st} msg=${msg}`);
+      }
+
+      if (!batchResult) {
+        await setItemEstado(job.id_job, item.id_item, 'sesion_vencida', null, 'Sesión vencida durante batch');
+        try { await setJobEstado(job.id_job, 'sesion_vencida', 'Sesión vencida durante batch'); } catch (_) {}
+        return;
+      }
+
+      if (batchResult.sessionExpired) {
+        await setItemEstado(job.id_job, item.id_item, 'sesion_vencida', null, batchResult.error);
+        try { await setJobEstado(job.id_job, 'sesion_vencida', batchResult.error); } catch (_) {}
+        return;
+      }
+
+      if (!batchResult.ok) {
+        await setItemEstado(job.id_job, item.id_item, 'fallido', null, batchResult.error || 'Fallo del worker');
+        continue;
+      }
+
+      // Detectar sin información en batch
+      const tieneDatos = batchResult.numero_identificacion_propietario || batchResult.nombre_razon_social_propietario;
+      if (!tieneDatos) {
+        await setItemEstado(job.id_job, item.id_item, 'sin_informacion', batchResult, null);
+        await guardarResultadoScraping(job.id_job, item.id_item, job.modulo, batchResult, job.fk_usuario);
+        continue;
+      }
+
+      await setItemEstado(job.id_job, item.id_item, 'exitoso', batchResult, null);
+      await guardarResultadoScraping(job.id_job, item.id_item, job.modulo, batchResult, job.fk_usuario);
+    }
+
+    try {
+      await setJobEstado(job.id_job, 'finalizado');
+      console.log(`[worker] Job ${job.id_job} marcado como finalizado (BATCH)`);
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 500) {
+        console.log(`[worker] Job ${job.id_job} ya fue finalizado por el backend (status 500)`);
+      } else {
+        console.error(`[worker] Error marcando job ${job.id_job} como finalizado:`, err.message);
+      }
+    }
+  } catch (error) {
+    console.error(`[worker] Error en procesarJobBatch:`, error.message);
+    for (const item of items) {
+      try { await setItemEstado(job.id_job, item.id_item, 'fallido', null, error.message); } catch (_) {}
+    }
+  }
+}
+
 async function procesarJob(job, items) {
+  if (job.modulo === 'consulta-placa' && items.length > 1) {
+    return procesarJobBatch(job, items);
+  }
+
   for (const item of items) {
     try {
       await setItemEstado(job.id_job, item.id_item, 'procesando');

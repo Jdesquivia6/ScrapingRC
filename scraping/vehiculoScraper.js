@@ -16,6 +16,25 @@ async function delay(page, min = 700, max = 1700) {
   await page.waitForTimeout(random(min, max));
 }
 
+// ─────────────────────────────────────────────
+// TIMER PARA MEDICIÓN DE RENDIMIENTO
+// ─────────────────────────────────────────────
+
+async function medirTiempo(label, fn) {
+  const inicio = Date.now();
+  console.log(`[scraper] [START] ${label}`);
+  try {
+    const resultado = await fn();
+    const duracion = Date.now() - inicio;
+    console.log(`[scraper] [END] ${label} | ${duracion}ms (${(duracion / 1000).toFixed(1)}s)`);
+    return resultado;
+  } catch (error) {
+    const duracion = Date.now() - inicio;
+    console.log(`[scraper] [FAIL] ${label} | ${duracion}ms (${(duracion / 1000).toFixed(1)}s) | ${error.message}`);
+    throw error;
+  }
+}
+
 function normalizarPlaca(placa) {
   return String(placa || '').trim().toUpperCase();
 }
@@ -97,14 +116,14 @@ async function clearAndTypeSlow(locator, value) {
   await locator.press('Backspace');
 
   for (const ch of String(value)) {
-    await locator.type(ch, { delay: random(90, 160) });
+    await locator.type(ch, { delay: random(40, 70) });
   }
 }
 
 async function tabular(page) {
-  await delay(page, 250, 600);
+  await delay(page, 150, 350);
   await page.keyboard.press('Tab');
-  await delay(page, 700, 1200);
+  await delay(page, 400, 700);
 }
 
 async function cancelarBusquedaSiExiste(page) {
@@ -112,9 +131,9 @@ async function cancelarBusquedaSiExiste(page) {
     const botonCancelar = page.locator('button', { hasText: 'Cancelar' }).first();
 
     if (await botonCancelar.isVisible({ timeout: 4000 })) {
-      await delay(page, 500, 900);
+      await delay(page, 300, 600);
       await botonCancelar.click();
-      await delay(page, 1000, 1800);
+      await delay(page, 600, 1000);
       console.log('↩️ Se presionó Cancelar para limpiar la búsqueda');
     }
   } catch (error) {
@@ -136,7 +155,7 @@ async function escribirPlacaConFlujoCorrecto(page, placa) {
   await tabular(page);
 
   // Volver a enfocar el input y confirmar placa
-  await delay(page, 600, 1000);
+  await delay(page, 350, 600);
 
   const inputConfirmacion = page.locator('input[formcontrolname="campo"]').first();
   await inputConfirmacion.waitFor({ state: 'visible', timeout: 15000 });
@@ -147,7 +166,7 @@ async function escribirPlacaConFlujoCorrecto(page, placa) {
   // Segundo tab
   await tabular(page);
 
-  await delay(page, 900, 1600);
+  await delay(page, 500, 900);
 
   const valorFinal = normalizarPlaca(
     await inputConfirmacion.inputValue().catch(() => '')
@@ -173,7 +192,7 @@ async function clickBuscar(page) {
     throw new Error('El botón Buscar está deshabilitado');
   }
 
-  await delay(page, 800, 1500);
+  await delay(page, 500, 900);
   await botonBuscar.click();
 
   console.log('🔎 Se hizo clic en Buscar');
@@ -275,15 +294,19 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
     console.log('======================================');
     console.log('Consultando placa:', placaNormalizada);
 
-    await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await delay(page, 2000, 3500);
+    const inicioDoc = Date.now();
+
+    await medirTiempo('Navegar a RUNT + espera inicial', async () => {
+      await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await delay(page, 1200, 2000);
+    });
 
     if (await detectarSesionVencida(page)) {
       return respuestaSesionVencida(placaNormalizada);
     }
 
     // Limpiar búsqueda anterior si la pantalla quedó pegada
-    await cancelarBusquedaSiExiste(page);
+    await medirTiempo('Limpiar búsqueda anterior', () => cancelarBusquedaSiExiste(page));
 
     const responsePromise = page.waitForResponse(
       resp =>
@@ -294,16 +317,18 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
 
     // Flujo correcto:
     // placa -> tab -> placa -> tab -> buscar
-    await escribirPlacaConFlujoCorrecto(page, placaNormalizada);
+    await medirTiempo('Escribir placa (doble intento)', () => escribirPlacaConFlujoCorrecto(page, placaNormalizada));
 
-    await clickBuscar(page);
+    await medirTiempo('Clic en Buscar', () => clickBuscar(page));
 
     if (await detectarSesionVencida(page)) {
       return respuestaSesionVencida(placaNormalizada);
     }
 
-    const response = await responsePromise;
-    const data = await response.json();
+    const { data } = await medirTiempo('Esperar respuesta RUNT', async () => {
+      const response = await responsePromise;
+      return { data: await response.json() };
+    });
 
     if (await detectarSesionVencida(page)) {
       return respuestaSesionVencida(placaNormalizada);
@@ -311,28 +336,34 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
 
     console.log('✅ Data capturada');
 
-    const propietario = extraerPropietario(data);
+    const parsed = await medirTiempo('Parsear datos', () => {
+      const propietario = extraerPropietario(data);
 
-    const tipoDoc = extraerTipoDocumento(propietario);
-    const numeroDoc = extraerNumeroDocumento(propietario);
-    const nombreCompleto = extraerNombrePropietario(propietario);
+      const tipoDoc = extraerTipoDocumento(propietario);
+      const numeroDoc = extraerNumeroDocumento(propietario);
+      const nombreCompleto = extraerNombrePropietario(propietario);
 
-    const { nombres, apellidos } = separarNombreCompleto(nombreCompleto);
+      const { nombres, apellidos } = separarNombreCompleto(nombreCompleto);
 
-    const celular = limpiarTexto(
-      propietario?.celular ||
-      propietario?.numeroCelular ||
-      propietario?.telefonoCelular
-    );
+      const celular = limpiarTexto(
+        propietario?.celular ||
+        propietario?.numeroCelular ||
+        propietario?.telefonoCelular
+      );
 
-    const correo = limpiarTexto(
-      propietario?.correo ||
-      propietario?.correoElectronico ||
-      propietario?.email
-    );
+      const correo = limpiarTexto(
+        propietario?.correo ||
+        propietario?.correoElectronico ||
+        propietario?.email
+      );
 
-    const tecno = data?.listaRtm?.[0] || null;
-    const soat = data?.listaPolizas?.[0] || null;
+      const tecno = data?.listaRtm?.[0] || null;
+      const soat = data?.listaPolizas?.[0] || null;
+
+      return { tipoDoc, numeroDoc, nombreCompleto, nombres, apellidos, celular, correo, tecno, soat };
+    });
+
+    const { tipoDoc, numeroDoc, nombreCompleto, nombres, apellidos, celular, correo, tecno, soat } = parsed;
 
     if (await detectarSesionVencida(page)) {
       return respuestaSesionVencida(placaNormalizada);
@@ -405,7 +436,7 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
     // await client.query('COMMIT');
 
     // Después de guardar correctamente, cancelar para limpiar la pantalla
-    await cancelarBusquedaSiExiste(page);
+    await medirTiempo('Limpiar pantalla (Cancelar)', () => cancelarBusquedaSiExiste(page));
 
     // Armar respuesta con toda la info
     const resultado = {
@@ -432,12 +463,16 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
     // Enviar a servicio externo (fotodetecciones) — no bloqueante
     enviarAExterno(resultado);
 
+    const totalMs = Date.now() - inicioDoc;
+    console.log(`[scraper] [TOTAL] Placa ${placaNormalizada} | ${totalMs}ms (${(totalMs / 1000).toFixed(1)}s)`);
+
     return resultado;
 
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
 
-    console.error('❌ Error scraping:', error.message);
+    const totalMs = Date.now() - inicioDoc;
+    console.error(`❌ Error scraping: ${error.message} | ${totalMs}ms (${(totalMs / 1000).toFixed(1)}s)`);
 
     // Aunque falle, intentamos cancelar para que no quede pegado
     await cancelarBusquedaSiExiste(page);
@@ -450,5 +485,148 @@ exports.scrapeVehiculo = async ({ placa, id_consul_placa }) => {
 
   } finally {
     client.release();
+  }
+};
+
+// ─────────────────────────────────────────────
+// BATCH: reuso de pestaña para múltiples placas
+// ─────────────────────────────────────────────
+// Conecta una sola vez a Chrome, navega una vez, y reutiliza la pestaña.
+// Placa 1 incluye navegación completa; placas 2+ saltan goto + cancelar inicial.
+
+exports.scrapeVehiculoBatch = async ({ placaItems }) => {
+  const { page } = await connectToChrome();
+  const resultados = [];
+
+  try {
+    console.log('======================================');
+    console.log(`[BATCH] Consultando ${placaItems.length} placas...`);
+
+    await medirTiempo('Navegar a RUNT (único)', async () => {
+      await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await delay(page, 1200, 2000);
+    });
+
+    if (await detectarSesionVencida(page)) {
+      return placaItems.map(item => ({
+        ok: false,
+        placa: normalizarPlaca(item.placa),
+        sessionExpired: true,
+        error: 'Sesión RUNT vencida'
+      }));
+    }
+
+    await cancelarBusquedaSiExiste(page);
+
+    for (let i = 0; i < placaItems.length; i++) {
+      const { placa } = placaItems[i];
+      const placaNormalizada = normalizarPlaca(placa);
+      const inicioDoc = Date.now();
+
+      try {
+        console.log('======================================');
+        console.log(`[BATCH ${i + 1}/${placaItems.length}] Placa: ${placaNormalizada}`);
+
+        if (await detectarSesionVencida(page)) {
+          resultados.push(respuestaSesionVencida(placaNormalizada));
+          break;
+        }
+
+        const responsePromise = page.waitForResponse(
+          resp =>
+            resp.url().includes('/RNFGestionSolicitudMS/consulta/vehiculo') &&
+            resp.status() === 200,
+          { timeout: 30000 }
+        );
+
+        await medirTiempo('Escribir placa (doble intento)', () =>
+          escribirPlacaConFlujoCorrecto(page, placaNormalizada)
+        );
+
+        await medirTiempo('Clic en Buscar', () => clickBuscar(page));
+
+        if (await detectarSesionVencida(page)) {
+          resultados.push(respuestaSesionVencida(placaNormalizada));
+          break;
+        }
+
+        const { data } = await medirTiempo('Esperar respuesta RUNT', async () => {
+          const response = await responsePromise;
+          return { data: await response.json() };
+        });
+
+        if (await detectarSesionVencida(page)) {
+          resultados.push(respuestaSesionVencida(placaNormalizada));
+          break;
+        }
+
+        console.log('✅ Data capturada');
+
+        const parsed = await medirTiempo('Parsear datos', () => {
+          const propietario = extraerPropietario(data);
+
+          const tipoDoc = extraerTipoDocumento(propietario);
+          const numeroDoc = extraerNumeroDocumento(propietario);
+          const nombreCompleto = extraerNombrePropietario(propietario);
+
+          const { nombres, apellidos } = separarNombreCompleto(nombreCompleto);
+
+          const celular = limpiarTexto(
+            propietario?.celular ||
+            propietario?.numeroCelular ||
+            propietario?.telefonoCelular
+          );
+
+          const correo = limpiarTexto(
+            propietario?.correo ||
+            propietario?.correoElectronico ||
+            propietario?.email
+          );
+
+          const tecno = data?.listaRtm?.[0] || null;
+          const soat = data?.listaPolizas?.[0] || null;
+
+          return { tipoDoc, numeroDoc, nombreCompleto, nombres, apellidos, celular, correo, tecno, soat };
+        });
+
+        const { tipoDoc, numeroDoc, nombreCompleto, celular, correo, tecno, soat } = parsed;
+
+        await cancelarBusquedaSiExiste(page);
+
+        const resultado = {
+          ok: true,
+          placa: placaNormalizada,
+          tipo_identificacion_propietario: tipoDoc,
+          numero_identificacion_propietario: numeroDoc,
+          nombre_razon_social_propietario: nombreCompleto,
+          fecha_expedicion_tecno: tecno?.fechaExpedicion || null,
+          fecha_vigencia_tecno: tecno?.fechaVigencia || null,
+          fecha_inicio_vigencia_soat: soat?.fechaInicio || null,
+          fecha_vencimiento_vigencia_soat: soat?.fechaVencimiento || null,
+          data,
+          message: 'Scraping y guardado exitoso'
+        };
+
+        enviarAExterno(resultado);
+        resultados.push(resultado);
+
+        const totalMs = Date.now() - inicioDoc;
+        console.log(`[scraper] [TOTAL] Placa ${placaNormalizada} | ${totalMs}ms (${(totalMs / 1000).toFixed(1)}s) [BATCH]`);
+
+      } catch (error) {
+        console.error(`❌ Error scraping ${placaNormalizada}: ${error.message}`);
+        await cancelarBusquedaSiExiste(page);
+        resultados.push({
+          ok: false,
+          placa: placaNormalizada,
+          error: error.message
+        });
+      }
+    }
+
+    return resultados;
+
+  } finally {
+    // No pool client needed — worker handles DB
   }
 };

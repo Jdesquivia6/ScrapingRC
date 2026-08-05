@@ -35,6 +35,21 @@ async function reiniciarSesionRunt() {
   return sessionStartedAt;
 }
 
+async function simularMinutosRestantes(minutos) {
+  if (typeof minutos !== 'number' || minutos < 0 || minutos > 120) {
+    throw new Error('minutos debe ser un numero entre 0 y 120');
+  }
+  const minutosTranscurridos = SESSION_DURATION_MINUTES - minutos;
+  const sessionStartedAt = new Date(Date.now() - minutosTranscurridos * 60000);
+  await guardarSesionDB(sessionStartedAt);
+  return sessionStartedAt;
+}
+
+async function limpiarSesionTest() {
+  sesionLocal = null;
+  return true;
+}
+
 async function obtenerEstadoSesionRunt() {
   const sessionStartedAt = await obtenerSesionDB();
 
@@ -86,5 +101,7 @@ async function obtenerEstadoSesionRunt() {
 module.exports = {
   iniciarSesionRunt,
   reiniciarSesionRunt,
-  obtenerEstadoSesionRunt
+  obtenerEstadoSesionRunt,
+  simularMinutosRestantes,
+  limpiarSesionTest
 };

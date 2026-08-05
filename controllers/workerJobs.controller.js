@@ -440,13 +440,13 @@ exports.exportarJobExcel = async (req, res) => {
     }
 
     const itemsResult = await pool.query(`
-      SELECT numero_documento
+      SELECT documento
       FROM worker_job_items
       WHERE fk_job = $1
     `, [id]);
 
     const documentos = itemsResult.rows
-      .map(r => r.numero_documento)
+      .map(r => r.documento)
       .filter(Boolean);
 
     if (documentos.length === 0) {
@@ -1117,6 +1117,9 @@ exports.guardarResultadoScraping = async (req, res) => {
     if (modulo === 'consulta-placa') {
       const placa = resultado.placa || '';
       
+      // Detectar si la placa no tiene información (no existe en RUNT)
+      const sinInformacion = resultado.ok && !resultado.numero_identificacion_propietario && !resultado.nombre_razon_social_propietario;
+
       // 1. Insertar/actualizar consultas_placas
       await client.query(`
         INSERT INTO consultas_placas 
@@ -1136,7 +1139,12 @@ exports.guardarResultadoScraping = async (req, res) => {
       );
       const id_consul_placa = placaResult.rows[0]?.id_consul_placa;
 
-      if (id_consul_placa && resultado.ok) {
+      // Si es sin información, solo marcar como consultada (no insertar datos nulos)
+      if (sinInformacion) {
+        console.log(`[guardar] Placa ${placa}: sin información - no se insertan datos en tablas propietario`);
+      }
+
+      if (id_consul_placa && resultado.ok && !sinInformacion) {
         // 2. Insertar/actualizar SOAT/Técnico/Propietario
         // Primero eliminar registros existentes de este propietario para evitar duplicados
         await client.query(

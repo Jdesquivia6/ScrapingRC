@@ -17,6 +17,25 @@ async function delay(page, min = 800, max = 2500) {
   await page.waitForTimeout(random(min, max));
 }
 
+// ─────────────────────────────────────────────
+// TIMER PARA MEDICIÓN DE RENDIMIENTO
+// ─────────────────────────────────────────────
+
+async function medirTiempo(label, fn) {
+  const inicio = Date.now();
+  console.log(`[scraper] [START] ${label}`);
+  try {
+    const resultado = await fn();
+    const duracion = Date.now() - inicio;
+    console.log(`[scraper] [END] ${label} | ${duracion}ms (${(duracion / 1000).toFixed(1)}s)`);
+    return resultado;
+  } catch (error) {
+    const duracion = Date.now() - inicio;
+    console.log(`[scraper] [FAIL] ${label} | ${duracion}ms (${(duracion / 1000).toFixed(1)}s) | ${error.message}`);
+    throw error;
+  }
+}
+
 function limpiarTexto(valor) {
   if (valor === undefined || valor === null) return null;
 
@@ -700,12 +719,16 @@ exports.scrapeDireccionesPN = async ({
     console.log('======================================');
     console.log('Consultando direcciones PN:', documento);
 
-    await prepararFormulario(page, tipoDocumento);
+    const inicioDoc = Date.now();
 
-    await humanClearAndType(
-      page,
-      'input[formcontrolname="nroDocumento"]',
-      documento
+    await medirTiempo('Preparar formulario', () => prepararFormulario(page, tipoDocumento));
+
+    await medirTiempo('Escribir documento', () =>
+      humanClearAndType(
+        page,
+        'input[formcontrolname="nroDocumento"]',
+        documento
+      )
     );
 
     const responsePromise = esperarRespuestaDireccionesPN(page, documento)
@@ -724,13 +747,13 @@ exports.scrapeDireccionesPN = async ({
         };
       });
 
-    await clickBuscar(page);
+    await medirTiempo('Clic en Buscar', () => clickBuscar(page));
 
     if (await detectarSesionVencida(page)) {
       return respuestaSesionVencida(documento);
     }
 
-    await delay(page, 1800, 3000);
+    await medirTiempo('Espera post-búsqueda (delay 1.8-3s)', () => delay(page, 1800, 3000));
 
     const textoAlerta = await aceptarAlertaSiExiste(page);
 
@@ -764,10 +787,12 @@ exports.scrapeDireccionesPN = async ({
       };
     }
 
-    const resultadoRespuesta = await responsePromise;
+    const resultadoRespuesta = await medirTiempo('Esperar respuesta RUNT', async () => responsePromise);
     // El .then() en esperarRespuestaDireccionesPN ya parseó el JSON
     const rawData = resultadoRespuesta.data;
-    const items = normalizarRespuestaDirecciones(rawData);
+    const items = await medirTiempo('Normalizar respuesta', () =>
+      Promise.resolve(normalizarRespuestaDirecciones(rawData))
+    );
 
     if (!items.length) {
       throw new Error('El JSON recibido no contiene datos de direcciones');
@@ -775,21 +800,26 @@ exports.scrapeDireccionesPN = async ({
 
     console.log('✅ JSON direcciones PN capturado');
 
-    await delay(page, 1800, 3200);
+    await medirTiempo('Espera pre-screenshot (delay 1.8-3.2s)', () => delay(page, 1800, 3200));
 
     const screenshotsDir = path.join(__dirname, '../screenshots');
 
-    const screenshotPath = await takeScreenshot(
-      page,
-      screenshotsDir,
-      `runt-direcciones-${documento}.png`
-    ).catch(error => {
-      console.warn('⚠️ No se pudo guardar screenshot de éxito:', error.message);
-      return null;
-    });
+    const screenshotPath = await medirTiempo('Screenshot', () =>
+      takeScreenshot(
+        page,
+        screenshotsDir,
+        `runt-direcciones-${documento}.png`
+      ).catch(error => {
+        console.warn('⚠️ No se pudo guardar screenshot de éxito:', error.message);
+        return null;
+      })
+    );
 
     // NO guardar aquí - el worker centraliza el guardado en DB via guardar-resultado
     // El guardado en DB se hace en el worker via guardarResultadoScraping
+
+    const totalMs = Date.now() - inicioDoc;
+    console.log(`[scraper] [TOTAL] Consulta ${documento} | ${totalMs}ms (${(totalMs / 1000).toFixed(1)}s)`);
 
     return {
       ok: true,
@@ -803,7 +833,8 @@ exports.scrapeDireccionesPN = async ({
     };
 
   } catch (error) {
-    console.error('❌ Error direcciones PN:', error.message);
+    const totalMs = Date.now() - inicioDoc;
+    console.error(`❌ Error direcciones PN: ${error.message} | ${totalMs}ms (${(totalMs / 1000).toFixed(1)}s)`);
 
     const screenshotsDir = path.join(__dirname, '../screenshots');
 
