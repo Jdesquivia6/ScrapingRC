@@ -1638,7 +1638,7 @@ exports.guardarResultadoScraping = async (req, res) => {
               error_consulta_direccion = NULL,
               fecha_consulta_direccion = NOW(),
               fecha_actualizacion = NOW(),
-              origen_registro = 'CARGADO_POR_EXCEL'
+              origen_registro = CASE WHEN origen_registro LIKE 'API_%' THEN origen_registro ELSE 'CARGADO_POR_EXCEL' END
             WHERE numero_documento = $1
           `, [numDoc, tipoDoc, nombres || null, apellidos || null, telefono, correo, idDireccion]);
         } else {
@@ -1706,7 +1706,7 @@ exports.guardarResultadoScraping = async (req, res) => {
               direccion_encontrada = FALSE,
               error_consulta_direccion = $3,
               fecha_consulta_direccion = NOW(),
-              origen_registro = 'CARGADO_POR_EXCEL'
+              origen_registro = CASE WHEN origen_registro LIKE 'API_%' THEN origen_registro ELSE 'CARGADO_POR_EXCEL' END
             WHERE numero_documento = $1
           `, [numDoc, tipoDoc, resultado.error || 'No se encontraron direcciones']);
         } else {

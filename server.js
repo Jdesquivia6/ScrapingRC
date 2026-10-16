@@ -16,6 +16,7 @@ const workerJobsRoutes = require('./routes/workerJobs.routes');
 const historialRoutes = require('./routes/historial.routes');
 const configRoutes = require('./routes/config.routes');
 const ubicabilidadPersonasRoutes = require('./routes/ubicabilidadPersonas.routes');
+const integracionesRoutes = require('./routes/integracionesUbicabilidad.routes');
 const {
   exportarDashboardExcel
 } = require('./controllers/dashboard.controller');
@@ -40,7 +41,7 @@ app.use((req, res, next) => {
   }
 
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Key');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
 
@@ -51,7 +52,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+// Límite ampliado para soportar cargas masivas de integraciones (miles de personas)
+app.use(express.json({ limit: '5mb' }));
 
 app.use('/api/personas/direcciones', civitransRoutes);
 app.use('/api/liquidacion', liquidacionRoutes);
@@ -69,6 +71,9 @@ app.use('/api/worker-jobs', workerJobsRoutes);
 app.use('/api/historial', historialRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/ubicabilidad-personas', ubicabilidadPersonasRoutes);
+
+// API de integración para sistemas externos (autenticación por X-API-Key)
+app.use('/api/v1/integraciones', integracionesRoutes);
 
 app.listen(process.env.PORT, () => {
   console.log(`API corriendo en puerto ${process.env.PORT}`);
