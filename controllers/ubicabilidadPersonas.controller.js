@@ -72,11 +72,95 @@ exports.validarArchivo = async (req, res) => {
         registros_validos: validos.length,
         registros_duplicados: duplicados.length,
         registros_error: errores.length,
-        documentos: validos.slice(0, 100) // Preview primeros 100
+        documentos: validos
       }
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
+  }
+};
+
+/**
+ * Guarda documentos validados en persona_natural_propietario con origen CARGADO_POR_EXCEL.
+ * Valida contra duplicados existentes y solo inserta los nuevos en lote.
+ * Body: { documentos: [{ tipo: "C.C.", numero: "12345" }, ...] }
+ */
+exports.guardarDocumentos = async (req, res) => {
+  try {
+    const { documentos } = req.body;
+
+    if (!documentos || !Array.isArray(documentos) || documentos.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Debe enviar un arreglo de documentos' });
+    }
+
+    // 1) Limpiar y filtrar documentos válidos
+    const docsValidos = documentos.filter(d => {
+      const tipo = String(d.tipo || '').trim();
+      const numero = String(d.numero || '').trim();
+      return tipo && numero;
+    }).map(d => ({
+      tipo: String(d.tipo || '').trim(),
+      numero: String(d.numero || '').trim()
+    }));
+
+    if (docsValidos.length === 0) {
+      return res.status(400).json({ ok: false, error: 'No hay documentos válidos para guardar' });
+    }
+
+    // 2) Verificar cuáles ya existen en la BD (cualquier origen)
+    const tipos = docsValidos.map(d => d.tipo);
+    const numeros = docsValidos.map(d => d.numero);
+
+    const existentes = await pool.query(`
+      SELECT DISTINCT tipo_documento, numero_documento
+      FROM persona_natural_propietario
+      WHERE (tipo_documento, numero_documento) IN (
+        SELECT * FROM unnest($1::text[], $2::text[]) AS u(tipo, numero)
+      )
+    `, [tipos, numeros]);
+
+    const existentesSet = new Set(
+      existentes.rows.map(r => `${r.tipo_documento}|${r.numero_documento}`)
+    );
+
+    // 3) Filtrar solo los nuevos
+    const nuevos = docsValidos.filter(d => {
+      const key = `${d.tipo}|${d.numero}`;
+      return !existentesSet.has(key);
+    });
+
+    const duplicados = docsValidos.length - nuevos.length;
+
+    // 4) Insertar solo los nuevos en lote
+    let insertados = 0;
+    if (nuevos.length > 0) {
+      const nuevosTipos = nuevos.map(d => d.tipo);
+      const nuevosNumeros = nuevos.map(d => d.numero);
+
+      const result = await pool.query(`
+        INSERT INTO persona_natural_propietario (
+          tipo_documento, numero_documento,
+          direccion_consultada, direccion_encontrada,
+          origen_registro, fecha_actualizacion
+        )
+        SELECT u.tipo, u.numero, FALSE, FALSE, $3, NOW()
+        FROM unnest($1::text[], $2::text[]) AS u(tipo, numero)
+        ON CONFLICT (tipo_documento, numero_documento) DO NOTHING
+        RETURNING id_per_natural_dir
+      `, [nuevosTipos, nuevosNumeros, ORIGEN_EXCEL]);
+
+      insertados = result.rowCount;
+    }
+
+    return res.json({
+      ok: true,
+      insertados,
+      duplicados,
+      yaExistian: duplicados,
+      mensaje: `${insertados} insertado(s), ${duplicados} ya existían en BD`
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
   }
 };
 
@@ -153,9 +237,8 @@ exports.listarResultados = async (req, res) => {
       params.push(req.query.documento);
     }
 
-    // Filtro opcional por estado
+    // Filtro opcional por estado (no agrega parámetro: es una expresión literal)
     if (req.query.estado) {
-      paramCount++;
       if (req.query.estado === 'ERROR') {
         filtros.push(`p.direccion_consultada = TRUE AND p.direccion_encontrada = FALSE`);
       } else if (req.query.estado === 'PENDIENTE') {
@@ -222,5 +305,273 @@ exports.listarResultados = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
+  }
+};
+
+/**
+ * Lista personas pendientes de consulta con origen CARGADO_POR_EXCEL.
+ * Agrupa por tipo de documento para facilitar la carga en bloques.
+ */
+exports.listarPendientes = async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 100, 1000);
+
+    const result = await pool.query(`
+      SELECT DISTINCT ON (p.numero_documento)
+        p.id_per_natural_dir,
+        p.tipo_documento,
+        p.numero_documento,
+        p.nombres,
+        p.apellidos,
+        p.direccion_consultada,
+        p.direccion_encontrada,
+        p.fecha_consulta_direccion
+      FROM persona_natural_propietario p
+      WHERE p.direccion_consultada = FALSE
+        AND p.numero_documento IS NOT NULL
+        AND TRIM(p.numero_documento) <> ''
+        AND p.origen_registro = $1
+      ORDER BY p.numero_documento, p.fecha_actualizacion DESC
+      LIMIT $2
+    `, [ORIGEN_EXCEL, limit]);
+
+    const personas = result.rows;
+
+    // Agrupar por tipo de documento
+    const gruposMap = {};
+    for (const persona of personas) {
+      const tipo = persona.tipo_documento || 'SIN_TIPO';
+      if (!gruposMap[tipo]) {
+        gruposMap[tipo] = { tipoDocumento: tipo, documentos: [], count: 0 };
+      }
+      gruposMap[tipo].documentos.push(persona.numero_documento);
+      gruposMap[tipo].count++;
+    }
+
+    return res.json({
+      ok: true,
+      total: personas.length,
+      documentos: personas.map(p => p.numero_documento),
+      grupos: Object.values(gruposMap)
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+};
+
+/**
+ * Lista historial de personas consultadas con origen CARGADO_POR_EXCEL.
+ * Incluye dirección completa para exportación a Excel.
+ */
+exports.listarHistorial = async (req, res) => {
+  try {
+    const limit = req.query.limit ? Math.min(Number(req.query.limit), 100000) : null;
+
+    const result = await pool.query(`
+      SELECT DISTINCT ON (p.numero_documento)
+        p.tipo_documento,
+        p.numero_documento,
+        p.nombres,
+        p.apellidos,
+        p.celular,
+        p.correo,
+        p.direccion_consultada,
+        p.direccion_encontrada,
+        p.error_consulta_direccion,
+        p.fecha_consulta_direccion,
+        p.fecha_actualizacion,
+        d.direccion,
+        d.municio_departamento,
+        d.telefono,
+        d.tipo_direccion
+      FROM persona_natural_propietario p
+      LEFT JOIN direcciones d ON d.id_direcciones = p.fk_direcciones
+      WHERE p.direccion_consultada = TRUE
+        AND p.origen_registro = $1
+      ORDER BY p.numero_documento, COALESCE(p.fecha_consulta_direccion, p.fecha_actualizacion) DESC
+      ${limit !== null ? 'LIMIT $2' : ''}
+    `, limit !== null ? [ORIGEN_EXCEL, limit] : [ORIGEN_EXCEL]);
+
+    return res.json({
+      ok: true,
+      total: result.rows.length,
+      results: result.rows
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+};
+
+/**
+ * Elimina documentos pendientes con origen CARGADO_POR_EXCEL.
+ * Solo borra los que aún no han sido consultados (direccion_consultada = FALSE).
+ */
+exports.limpiarDocumentos = async (req, res) => {
+  try {
+    const result = await pool.query(`
+      DELETE FROM persona_natural_propietario
+      WHERE origen_registro = $1
+        AND (direccion_consultada = FALSE OR direccion_consultada IS NULL)
+    `, [ORIGEN_EXCEL]);
+
+    return res.json({
+      ok: true,
+      eliminados: result.rowCount,
+      mensaje: `${result.rowCount} documento(s) eliminado(s)`
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+};
+
+/* ════════════════════════════════════════════════════════════════
+   INTEGRACIONES API  (separadas a propósito de fotodetección/Excel)
+   Nunca se mezclan con el endpoint /pendientes existente.
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * Resumen de pendientes por origen (solo servicios API).
+ * GET /origenes-api
+ */
+exports.listarOrigenesApi = async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT p.origen_registro AS origen, COUNT(*)::int AS total
+      FROM persona_natural_propietario p
+      WHERE p.direccion_consultada = FALSE
+        AND p.origen_registro LIKE 'API_%'
+        AND p.numero_documento IS NOT NULL
+        AND TRIM(p.numero_documento) <> ''
+      GROUP BY p.origen_registro
+      ORDER BY COUNT(*) DESC, p.origen_registro ASC
+    `);
+
+    const total = result.rows.reduce((suma, fila) => suma + fila.total, 0);
+
+    return res.json({ ok: true, total, origenes: result.rows });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+};
+
+/**
+ * Pendientes provenientes EXCLUSIVAMENTE de servicios API.
+ * GET /pendientes-api?limit=1000&origen=API_CONTRAVENCIONES
+ *
+ * - `origenes` siempre devuelve los totales reales por origen (sin límite).
+ * - `grupos` devuelve los documentos listos para el textarea, opcionalmente
+ *   filtrados por un origen concreto y acotados por `limit`.
+ */
+exports.listarPendientesApi = async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 1000, 50000);
+    const origenFiltro = req.query.origen ? String(req.query.origen).trim() : '';
+
+    // 1) Resumen por origen (siempre completo)
+    const resumenResult = await pool.query(`
+      SELECT p.origen_registro AS origen, COUNT(*)::int AS total
+      FROM persona_natural_propietario p
+      WHERE p.direccion_consultada = FALSE
+        AND p.origen_registro LIKE 'API_%'
+        AND p.numero_documento IS NOT NULL
+        AND TRIM(p.numero_documento) <> ''
+      GROUP BY p.origen_registro
+      ORDER BY COUNT(*) DESC, p.origen_registro ASC
+    `);
+
+    // 2) Documentos para el textarea
+    const params = [];
+    let where = `
+      WHERE p.direccion_consultada = FALSE
+        AND p.origen_registro LIKE 'API_%'
+        AND p.numero_documento IS NOT NULL
+        AND TRIM(p.numero_documento) <> ''
+    `;
+
+    if (origenFiltro) {
+      if (!/^API_[A-Za-z0-9_]+$/.test(origenFiltro)) {
+        return res.status(400).json({ ok: false, error: 'Origen inválido (debe iniciar con API_)' });
+      }
+      params.push(origenFiltro);
+      where += ` AND p.origen_registro = $${params.length}`;
+    }
+
+    params.push(limit);
+    const result = await pool.query(`
+      SELECT DISTINCT ON (p.numero_documento)
+        p.tipo_documento,
+        p.numero_documento,
+        p.origen_registro
+      FROM persona_natural_propietario p
+      ${where}
+      ORDER BY p.numero_documento, p.fecha_actualizacion DESC
+      LIMIT $${params.length}
+    `, params);
+
+    // 3) Agrupar por origen y tipo de documento
+    const gruposMap = new Map();
+    for (const fila of result.rows) {
+      const origen = fila.origen_registro;
+      const tipo = fila.tipo_documento || 'SIN_TIPO';
+      const clave = `${origen}||${tipo}`;
+      if (!gruposMap.has(clave)) {
+        gruposMap.set(clave, { origen, tipoDocumento: tipo, documentos: [], count: 0 });
+      }
+      const grupo = gruposMap.get(clave);
+      grupo.documentos.push(fila.numero_documento);
+      grupo.count++;
+    }
+
+    const grupos = Array.from(gruposMap.values());
+    const total = resumenResult.rows.reduce((suma, fila) => suma + fila.total, 0);
+
+    return res.json({
+      ok: true,
+      total,
+      origenes: resumenResult.rows,
+      grupos,
+      documentos: result.rows.map(f => f.numero_documento)
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+};
+
+/**
+ * Elimina pendientes provenientes de servicios API.
+ * DELETE /limpiar-api?origen=API_CONTRAVENCIONES
+ * Sin ?origen borra todos los pendientes API_.
+ */
+exports.limpiarDocumentosApi = async (req, res) => {
+  try {
+    const origenFiltro = req.query.origen ? String(req.query.origen).trim() : '';
+    const params = [];
+
+    let where = `
+      WHERE origen_registro LIKE 'API_%'
+        AND (direccion_consultada = FALSE OR direccion_consultada IS NULL)
+    `;
+
+    if (origenFiltro) {
+      if (!/^API_[A-Za-z0-9_]+$/.test(origenFiltro)) {
+        return res.status(400).json({ ok: false, error: 'Origen inválido (debe iniciar con API_)' });
+      }
+      params.push(origenFiltro);
+      where += ` AND origen_registro = $${params.length}`;
+    }
+
+    const result = await pool.query(`
+      DELETE FROM persona_natural_propietario
+      ${where}
+    `, params);
+
+    return res.json({
+      ok: true,
+      eliminados: result.rowCount,
+      origen: origenFiltro || 'TODOS',
+      mensaje: `${result.rowCount} pendiente(s) de servicios API eliminado(s)`
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
   }
 };
