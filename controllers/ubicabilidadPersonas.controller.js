@@ -93,11 +93,18 @@ exports.guardarDocumentos = async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Debe enviar un arreglo de documentos' });
     }
 
-    // 1) Limpiar y filtrar documentos válidos
+    // 1) Limpiar y filtrar documentos válidos.
+    //    Los límites coinciden con las columnas (tipo_documento varchar(60),
+    //    numero_documento varchar(30)); un valor más largo revienta el INSERT entero.
+    let invalidos = 0;
     const docsValidos = documentos.filter(d => {
       const tipo = String(d.tipo || '').trim();
       const numero = String(d.numero || '').trim();
-      return tipo && numero;
+      if (!tipo || !numero || tipo.length > 60 || numero.length > 30) {
+        invalidos++;
+        return false;
+      }
+      return true;
     }).map(d => ({
       tipo: String(d.tipo || '').trim(),
       numero: String(d.numero || '').trim()
@@ -152,12 +159,16 @@ exports.guardarDocumentos = async (req, res) => {
       insertados = result.rowCount;
     }
 
+    const partes = [`${insertados} insertado(s)`, `${duplicados} ya existían en BD`];
+    if (invalidos > 0) partes.push(`${invalidos} inválido(s) por longitud`);
+
     return res.json({
       ok: true,
       insertados,
       duplicados,
+      invalidos,
       yaExistian: duplicados,
-      mensaje: `${insertados} insertado(s), ${duplicados} ya existían en BD`
+      mensaje: partes.join(', ')
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });

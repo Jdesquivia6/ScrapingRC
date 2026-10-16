@@ -16,12 +16,12 @@ function maximoPorRequest() {
   return Number.isFinite(valor) && valor > 0 ? valor : 5000;
 }
 
-function logIntegracion({ cliente, endpoint, recibidos, insertados, existentes, invalidos, duplicados, inicio }) {
+function logIntegracion({ cliente, endpoint, recibidos, insertados, existentes, invalidos, duplicados, fallidos = 0, inicio }) {
   const tiempo = Date.now() - inicio;
   console.log(
     `[integracion] cliente=${cliente} endpoint=${endpoint} recibidos=${recibidos}` +
     ` insertados=${insertados || 0} existentes=${existentes || 0}` +
-    ` invalidos=${invalidos || 0} duplicados=${duplicados || 0} tiempo=${tiempo}ms`
+    ` invalidos=${invalidos || 0} duplicados=${duplicados || 0} fallidos=${fallidos || 0} tiempo=${tiempo}ms`
   );
 }
 
@@ -149,6 +149,7 @@ exports.registrarPersonas = async (req, res) => {
   let existentes = 0;
   let invalidos = 0;
   let duplicados = 0;
+  let totalFallidos = 0;
 
   try {
     const body = req.body || {};
@@ -259,11 +260,11 @@ exports.registrarPersonas = async (req, res) => {
 
     // 3) Insertar en lote los que no existen (respetando el UNIQUE)
     const nuevos = validos.filter(v => !buscarExistente(indice, v.tipo, v.numero));
-    let insertadosSet = new Set();
+    const insertadosSet = new Set();
+    // clave `${tipoCanonico}|${numero}` -> { mensaje, codigo } de SQL
+    const fallidos = new Map();
 
     if (nuevos.length > 0) {
-      const tipos = nuevos.map(n => n.tipo);
-      const nums = nuevos.map(n => n.numero);
       try {
         const r = await pool.query(`
           INSERT INTO persona_natural_propietario (
@@ -275,10 +276,31 @@ exports.registrarPersonas = async (req, res) => {
           FROM unnest($1::text[], $2::text[]) AS u(tipo, numero)
           ON CONFLICT (tipo_documento, numero_documento) DO NOTHING
           RETURNING numero_documento
-        `, [tipos, nums, origen]);
-        insertadosSet = new Set(r.rows.map(x => x.numero_documento));
+        `, [nuevos.map(n => n.tipo), nuevos.map(n => n.numero), origen]);
+        r.rows.forEach(x => insertadosSet.add(x.numero_documento));
       } catch (err) {
-        console.error('[integracion] error insertando lote:', err.message);
+        // Un solo registro inválido (ej. tipo_documento > 30) revierte TODO el
+        // lote multi-fila. Reintentamos fila por fila para no perder el resto.
+        console.error('[integracion] lote rechazado, reintentando fila por fila:', err.message);
+        for (const n of nuevos) {
+          try {
+            const r = await pool.query(`
+              INSERT INTO persona_natural_propietario (
+                tipo_documento, numero_documento,
+                direccion_consultada, direccion_encontrada,
+                origen_registro, fecha_actualizacion
+              ) VALUES ($1, $2, FALSE, FALSE, $3, NOW())
+              ON CONFLICT (tipo_documento, numero_documento) DO NOTHING
+              RETURNING numero_documento
+            `, [n.tipo, n.numero, origen]);
+            if (r.rowCount > 0) insertadosSet.add(n.numero);
+          } catch (errFila) {
+            fallidos.set(`${n.tipo}|${n.numero}`, {
+              mensaje: errFila.message,
+              codigo: errFila.code || null
+            });
+          }
+        }
       }
     }
 
@@ -312,6 +334,17 @@ exports.registrarPersonas = async (req, res) => {
         continue;
       }
 
+      // Falló el INSERT de esta fila concreta: NO se guardó, no inventar 'YA_EXISTIA'
+      const falla = fallidos.get(`${valido.tipo}|${valido.numero}`);
+      if (falla) {
+        totalFallidos++;
+        item.estado_recepcion = 'ERROR';
+        item.estado_consulta = null;
+        item.resultado_disponible = false;
+        item.error = falla.mensaje;
+        continue;
+      }
+
       // Carrera concurrente: el ON CONFLICT no devolvió la fila
       existentes++;
       item.estado_recepcion = 'YA_EXISTIA';
@@ -322,24 +355,38 @@ exports.registrarPersonas = async (req, res) => {
     logIntegracion({
       cliente: cliente.codigo,
       endpoint: '/ubicabilidad/personas',
-      recibidos, insertados, existentes, invalidos, duplicados, inicio
+      recibidos, insertados, existentes, invalidos, duplicados, fallidos: totalFallidos, inicio
     });
 
-    return res.json({
-      ok: true,
+    const cuerpo = {
       cliente: cliente.codigo,
       total_recibidos: recibidos,
       insertados,
       existentes,
       invalidos,
       duplicados,
+      fallidos: totalFallidos,
       personas: response
-    });
+    };
+
+    // Si algo no se pudo guardar, NO responder 200: el integrador debe saberlo.
+    if (totalFallidos > 0) {
+      const soloLargo = Array.from(fallidos.values()).every(f => f.codigo === '22001');
+      return res.status(soloLargo ? 400 : 500).json({
+        ok: false,
+        error: soloLargo
+          ? 'Uno o más valores exceden el largo permitido por la base de datos'
+          : 'No se pudieron insertar todas las personas',
+        ...cuerpo
+      });
+    }
+
+    return res.json({ ok: true, ...cuerpo });
   } catch (error) {
     logIntegracion({
       cliente: cliente.codigo,
       endpoint: '/ubicabilidad/personas',
-      recibidos, insertados, existentes, invalidos, duplicados, inicio
+      recibidos, insertados, existentes, invalidos, duplicados, fallidos: totalFallidos, inicio
     });
     console.error('[integracion] error:', error.message);
     return res.status(500).json({ ok: false, error: 'Error procesando la solicitud' });

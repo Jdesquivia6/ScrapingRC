@@ -186,6 +186,7 @@ Permiso: `puede_insertar`
   "existentes": 1,
   "invalidos": 1,
   "duplicados": 0,
+  "fallidos": 0,
   "personas": [
     {
       "referencia_externa": "EXP-2026-00123",
@@ -218,8 +219,12 @@ Permiso: `puede_insertar`
 }
 ```
 
-**Los arrays resumen (`insertados`, `existentes`, `invalidos`, `duplicados`)
+**Los contadores (`insertados`, `existentes`, `invalidos`, `duplicados`, `fallidos`)
 suman exactamente `total_recibidos`.**
+
+> ⚠️ Si `fallidos > 0`, la API responde **`400` o `500`** con `ok: false`
+> (ver más abajo). **Nunca** responde `200` dando por hecho personas que
+> no se guardaron.
 
 #### `estado_recepcion`
 
@@ -229,14 +234,25 @@ suman exactamente `total_recibidos`.**
 | `YA_EXISTIA` | Ya estaba en la base (cualquier origen: API, Excel, scraping) |
 | `INVALIDO` | Falta un campo obligatorio o supera la longitud máxima |
 | `DUPLICADO` | Aparece dos veces **dentro de la misma petición** |
+| `ERROR` | El `INSERT` de esa fila falló y **no** se guardó; el detalle va en `error` |
 
 #### Errores
 
-| Código | `error` |
-|---|---|
-| `400` | `Debe enviar "personas" como arreglo no vacío` |
-| `413` | `Máximo 5000 personas por solicitud (recibidas: N)` |
-| `500` | `Error procesando la solicitud` |
+| Código | `error` | Cuándo |
+|---|---|---|
+| `400` | `Debe enviar "personas" como arreglo no vacío` | Body mal formado |
+| `400` | `Uno o más valores exceden el largo permitido por la base de datos` | `fallidos > 0` y todos los fallos son por longitud (`22001`) |
+| `413` | `Máximo 5000 personas por solicitud (recibidas: N)` | Se superó el máximo |
+| `500` | `No se pudieron insertar todas las personas` | `fallidos > 0` por otra causa |
+| `500` | `Error procesando la solicitud` | Falla inesperada del servidor |
+
+> Los `400`/`500` de inserción **sí traen el cuerpo completo**
+> (`insertados`, `existentes`, `fallidos` y `personas[]` con el detalle por
+> fila), para que puedan reenviar únicamente lo que faltó.
+>
+> **Nota de robustez:** si un registro del lote no se puede guardar, la API
+> reintenta **fila por fila**, de modo que un registro malo no descarta a los
+> demás. Solo las filas que siguen fallando aparecen como `ERROR`.
 
 #### Ejemplo `curl`
 
@@ -460,6 +476,15 @@ garantiza la idempotencia a nivel de base de datos.
 | `tipo_documento` | ≤ 60 caracteres | — |
 | Ítems por job (interno) | 90 | — (`MAX_ITEMS_POR_JOB`) |
 
+> Los límites de longitud **coinciden con las columnas de la base**
+> (`tipo_documento varchar(60)`, `numero_documento varchar(30)`). Si un valor
+> los excede, la fila aparece como `INVALIDO` (validación previa) o, en el
+> peor caso, como `ERROR` (rechazo de la base, SQLSTATE `22001`).
+>
+> Migración asociada: `scripts/ampliarTipoDocumento.sql`
+> (`tipo_documento` 30→60, `origen_registro` 50→60). El valor canónico de PPT
+> mide 31 caracteres y con la columna en 30 **revierta el lote completo**.
+
 ### Rate limit
 
 - Ventana de **60 segundos**, contador por `id_api_client`.
@@ -593,8 +618,12 @@ Cada llamada deja una línea estructurada que **no** contiene la clave:
 
 ```
 [integracion] cliente=CONTRAVENCIONES endpoint=/ubicabilidad/personas
-recibidos=150 insertados=142 existentes=5 invalidos=2 duplicados=1 tiempo=312ms
+recibidos=150 insertados=142 existentes=5 invalidos=2 duplicados=1 fallidos=0 tiempo=312ms
 ```
+
+> Si un registro no se pudo guardar, el log trae `fallidos=N` y, al lado,
+> una línea por fila rechazada. En ese caso la respuesta es `400`/`500`,
+> nunca `200`.
 
 Útil para diagnosticar. En `api_client.fecha_ultimo_uso` queda la marca de
 la última autenticación exitosa.
@@ -617,10 +646,10 @@ Content-Type: application/json
 | Código HTTP | Significado |
 |---|---|
 | `200` | OK |
-| `400` | Body inválido / parámetros faltantes |
+| `400` | Body inválido, parámetros faltantes o valores demasiado largos |
 | `401` | Sin API key o clave inválida |
 | `403` | Cliente inactivo o sin permiso |
 | `404` | Persona no registrada (solo en el endpoint individual) |
 | `413` | Body demasiado grande / más de 5000 personas |
 | `429` | Rate limit superado |
-| `500` | Error interno |
+| `500` | Error interno o inserción parcialmente fallida (`fallidos > 0`) |
