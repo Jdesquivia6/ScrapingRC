@@ -220,6 +220,42 @@ async function guardarResultadoScraping(jobId, itemId, modulo, resultado, fk_usu
   }
 }
 
+// Limpiar items que quedaron en 'procesando' por un crash o timeout del worker
+async function limpiarItemsAtascados(jobId, minutos = 5) {
+  try {
+    const res = await timedApiCall('limpiar-atascados', () =>
+      api.post(`/worker-jobs/${jobId}/worker/limpiar-atascados`, { minutos })
+    );
+    const items = res.data?.itemsReseteados || 0;
+    if (items > 0) {
+      console.log(`[worker] ${items} items atascados reseteados a 'pendiente' en job ${jobId}`);
+    }
+    return items;
+  } catch (err) {
+    const status = err?.response?.status;
+    const msg = err?.response?.data?.error || err.message;
+    console.warn(`[worker] No se pudo limpiar atascados en job ${jobId}: status=${status} msg=${msg}`);
+    return 0;
+  }
+}
+
+// Pausar job por sesion vencida: resetea items 'procesando' a 'pendiente' y marca job como 'sesion_vencida'
+async function pausarPorSesionVencida(jobId, errorMsg) {
+  try {
+    const res = await timedApiCall('pausar-sesion-vencida', () =>
+      api.post(`/worker-jobs/${jobId}/worker/pausar-sesion-vencida`, { error: errorMsg })
+    );
+    const items = res.data?.itemsReseteados || 0;
+    console.log(`[worker] Job ${jobId} pausado por sesion vencida. ${items} items reseteados a 'pendiente'`);
+    return res.data;
+  } catch (err) {
+    const status = err?.response?.status;
+    const msg = err?.response?.data?.error || err.message;
+    console.error(`[worker] No se pudo pausar job ${jobId} por sesion vencida: status=${status} msg=${msg}`);
+    return null;
+  }
+}
+
 async function resolverItem(modulo, payload) {
   if (modulo === 'consulta-placa') {
     const placa = String(payload.placa || '').trim().toUpperCase();
@@ -464,6 +500,9 @@ async function resolverItem(modulo, payload) {
 
 async function procesarJobBatch(job, items) {
   try {
+    // Limpiar items que quedaron en 'procesando' por un crash previo
+    await limpiarItemsAtascados(job.id_job, 5);
+
     const placaItems = items.map(item => ({
       placa: item.payload?.placa,
       id_item: item.id_item
@@ -537,6 +576,9 @@ async function procesarJob(job, items) {
     return procesarJobBatch(job, items);
   }
 
+  // Limpiar items que quedaron en 'procesando' por un crash previo (solo 1 vez al inicio)
+  await limpiarItemsAtascados(job.id_job, 5);
+
   for (const item of items) {
     try {
       await setItemEstado(job.id_job, item.id_item, 'procesando');
@@ -558,6 +600,8 @@ async function procesarJob(job, items) {
         await guardarResultadoScraping(job.id_job, item.id_item, job.modulo, resultado.resultado || {}, job.fk_usuario);
       } else if (resultado.estado === 'sesion_vencida') {
         await setItemEstado(job.id_job, item.id_item, 'sesion_vencida', resultado.resultado || null, resultado.error || 'Sesion vencida');
+        // Pausar job y resetear items 'procesando' a 'pendiente' para que se reprocesen
+        await pausarPorSesionVencida(job.id_job, resultado.error || 'Sesion RUNT vencida durante procesamiento');
         try { await setJobEstado(job.id_job, 'sesion_vencida', resultado.error || 'Sesion vencida durante procesamiento'); } catch (_) {}
         return;
       } else {

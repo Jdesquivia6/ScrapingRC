@@ -17,7 +17,9 @@ const {
   workerHeartbeat,
   guardarResultadoScraping,
   exportarJobExcel,
-  reintentarEnviosPersonasPendientes
+  reintentarEnviosPersonasPendientes,
+  limpiarItemsAtascados,
+  pausarPorSesionVencida
 } = require('../controllers/workerJobs.controller');
 
 router.get('/catalogos/estados', verifyToken, catalogoEstados);
@@ -36,6 +38,8 @@ router.post('/worker/heartbeat', verifyToken, workerHeartbeat);
 router.post('/:id/worker/item-estado', verifyToken, actualizarEstadoItem);
 router.post('/:id/worker/estado', verifyToken, actualizarEstadoJobWorker);
 router.post('/:id/worker/guardar-resultado', verifyToken, guardarResultadoScraping);
+router.post('/:id/worker/limpiar-atascados', verifyToken, limpiarItemsAtascados);
+router.post('/:id/worker/pausar-sesion-vencida', verifyToken, pausarPorSesionVencida);
 
 // Reintento de envíos pendientes de personas al microservicio externo
 router.post('/personas/reintentar-envios', verifyToken, reintentarEnviosPersonasPendientes);

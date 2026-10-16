@@ -40,7 +40,8 @@ const MODULES = new Set([
 
 // Límite de ítems por job según módulo (evita sesiones RUNT muy largas)
 const MAX_ITEMS_POR_JOB = {
-  'ubicabilidad-personas': 90
+  'ubicabilidad-personas': 90,
+  'personas-direcciones': 90
 };
 
 function chunkArray(array, size) {
@@ -762,6 +763,91 @@ exports.tomarSiguienteJob = async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: error.message
+    });
+  } finally {
+    client.release();
+  }
+};
+
+exports.limpiarItemsAtascados = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { minutos = 5 } = req.body || {};
+
+    if (typeof minutos !== 'number' || minutos < 1 || minutos > 60) {
+      return res.status(400).json({
+        ok: false,
+        error: 'minutos debe ser un numero entre 1 y 60'
+      });
+    }
+
+    const result = await pool.query(`
+      UPDATE worker_job_items
+      SET estado = 'pendiente'
+      WHERE fk_job = $1::uuid
+        AND estado = 'procesando'
+        AND updated_at < NOW() - ($2 || ' minutes')::interval
+      RETURNING id_item
+    `, [id, String(minutos)]);
+
+    if (result.rowCount > 0) {
+      console.log(`[workerJobs] ${result.rowCount} items atascados reseteados a 'pendiente' en job ${id}`);
+    }
+
+    return res.json({
+      ok: true,
+      itemsReseteados: result.rowCount
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+};
+
+exports.pausarPorSesionVencida = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { id } = req.params;
+    const { error = 'Sesion RUNT vencida durante procesamiento' } = req.body || {};
+
+    await client.query('BEGIN');
+
+    const resetResult = await client.query(`
+      UPDATE worker_job_items
+      SET estado = 'pendiente'
+      WHERE fk_job = $1::uuid
+        AND estado = 'procesando'
+      RETURNING id_item
+    `, [id]);
+
+    const jobResult = await client.query(`
+      UPDATE worker_jobs
+      SET estado = 'sesion_vencida',
+          error = $2
+      WHERE id_job = $1::uuid
+        AND estado IN ('pendiente', 'procesando')
+      RETURNING *
+    `, [id, error]);
+
+    await client.query('COMMIT');
+
+    if (jobResult.rowCount > 0) {
+      console.log(`[workerJobs] Job ${id} pausado por sesion vencida. ${resetResult.rowCount} items reseteados a 'pendiente'`);
+    }
+
+    return res.json({
+      ok: true,
+      job: jobResult.rows[0] || null,
+      itemsReseteados: resetResult.rowCount
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    return res.status(500).json({
+      ok: false,
+      error: err.message
     });
   } finally {
     client.release();
@@ -1575,42 +1661,36 @@ exports.guardarResultadoScraping = async (req, res) => {
           ]);
         }
 
-        // 3) Enviar al microservicio externo (no debe bloquear el guardado local)
-        try {
-          const body = {
-            tipoDocumento: tipoDoc,
-            numeroDocumento: numDoc,
-            nombres: nombres || null,
-            apellidos: apellidos || null,
-            direccion: direccion || null,
-            municipioDepartamento: municipio || null,
-            telefono: telefono || null,
-            correo: correo || null,
-            placa: null
-          };
+        // 3) Enviar al microservicio externo (fire-and-forget — no bloquea el guardado)
+        const body = {
+          tipoDocumento: tipoDoc,
+          numeroDocumento: numDoc,
+          nombres: nombres || null,
+          apellidos: apellidos || null,
+          direccion: direccion || null,
+          municipioDepartamento: municipio || null,
+          telefono: telefono || null,
+          correo: correo || null,
+          placa: null
+        };
 
-          await axios.post(EXTERNAL_API_PERSONAS, body, {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 15000
-          });
-
-          await client.query(`
+        axios.post(EXTERNAL_API_PERSONAS, body, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 15000
+        }).then(() => {
+          pool.query(`
             UPDATE persona_natural_propietario
             SET enviado_externo = TRUE, fecha_envio_externo = NOW(), error_envio_externo = NULL
             WHERE numero_documento = $1
-          `, [numDoc]);
-        } catch (err) {
+          `, [numDoc]).catch(e => console.warn(`[ubicabilidad-personas] No se pudo marcar enviado_externo ${numDoc}: ${e.message}`));
+        }).catch(err => {
           console.warn(`[ubicabilidad-personas] Error enviando al externo ${numDoc}: ${err.message}`);
-          try {
-            await client.query(`
-              UPDATE persona_natural_propietario
-              SET intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1, error_envio_externo = $2
-              WHERE numero_documento = $1
-            `, [numDoc, err.message]);
-          } catch (updateErr) {
-            console.warn(`[ubicabilidad-personas] No se pudo registrar intento externo ${numDoc}: ${updateErr.message}`);
-          }
-        }
+          pool.query(`
+            UPDATE persona_natural_propietario
+            SET intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1, error_envio_externo = $2
+            WHERE numero_documento = $1
+          `, [numDoc, err.message]).catch(e => console.warn(`[ubicabilidad-personas] No se pudo registrar intento ${numDoc}: ${e.message}`));
+        });
       } else {
         // Sin direcciones o error — crear/actualizar con error
         const existePersona = await client.query(

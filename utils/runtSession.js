@@ -1,21 +1,63 @@
+const fs = require('fs');
+const path = require('path');
+
 const SESSION_DURATION_MINUTES = 60;
 const SAFETY_MARGIN_MINUTES = 10;
 const MINUTES_PER_PLATE = 1.2;
 
 // ============================================
-// SESIÓN LOCAL POR INSTANCIA DE BACKEND
+// SESIÓN LOCAL PERSISTIDA EN DISCO
 // ============================================
-// Cada PC que corre su propio backend tiene su propia sesión RUNT en memoria.
-// Esto evita que varias PCs compartan la misma sesión en la base de datos.
+// Cada PC que corre su propio backend tiene su propia sesión RUNT.
+// Se persiste en sesion-runt.json (NO en memoria) para que sobreviva
+// a reinicios del backend, cierres del script "iniciar chrome", etc.
 
-let sesionLocal = null;
+const SESION_FILE = path.join(__dirname, '..', 'sesion-runt.json');
+
+function leerSesion() {
+  try {
+    if (!fs.existsSync(SESION_FILE)) return null;
+    const data = JSON.parse(fs.readFileSync(SESION_FILE, 'utf8'));
+    return data?.sessionStartedAt ? new Date(data.sessionStartedAt) : null;
+  } catch (err) {
+    console.warn('No se pudo leer sesion-runt.json:', err.message);
+    return null;
+  }
+}
+
+function escribirSesion(sessionStartedAt) {
+  try {
+    fs.writeFileSync(SESION_FILE, JSON.stringify({
+      sessionStartedAt: sessionStartedAt.toISOString()
+    }));
+    return true;
+  } catch (err) {
+    console.error('No se pudo escribir sesion-runt.json:', err.message);
+    return false;
+  }
+}
+
+function limpiarSesionArchivo() {
+  try {
+    if (fs.existsSync(SESION_FILE)) fs.unlinkSync(SESION_FILE);
+  } catch (err) {
+    console.warn('No se pudo limpiar sesion-runt.json:', err.message);
+  }
+}
 
 async function obtenerSesionDB() {
-  return sesionLocal;
+  const sesion = leerSesion();
+  if (!sesion) return null;
+  const minutosTranscurridos = (Date.now() - sesion.getTime()) / 60000;
+  if (minutosTranscurridos >= SESSION_DURATION_MINUTES) {
+    limpiarSesionArchivo();
+    return null;
+  }
+  return sesion;
 }
 
 async function guardarSesionDB(sessionStartedAt) {
-  sesionLocal = sessionStartedAt;
+  escribirSesion(sessionStartedAt);
   return true;
 }
 
@@ -46,7 +88,7 @@ async function simularMinutosRestantes(minutos) {
 }
 
 async function limpiarSesionTest() {
-  sesionLocal = null;
+  limpiarSesionArchivo();
   return true;
 }
 
