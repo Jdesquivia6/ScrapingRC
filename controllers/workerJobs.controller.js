@@ -1495,7 +1495,25 @@ exports.guardarResultadoScraping = async (req, res) => {
         ]);
 
         if (updatePersona.rowCount === 0) {
-          throw new Error(`No existe persona_natural_propietario para documento ${numDoc}`);
+          // La persona no existía: en lugar de reventar el item, se crea.
+          await client.query(`
+            INSERT INTO persona_natural_propietario (
+              tipo_documento, numero_documento, nombres, apellidos,
+              celular, correo, fk_direcciones,
+              direccion_consultada, direccion_encontrada,
+              error_consulta_direccion, fecha_consulta_direccion
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,TRUE,NULL,NOW())
+          `, [
+            tipoDoc || 'Cédula Ciudadanía',
+            numDoc,
+            nombres || null,
+            apellidos || null,
+            telefono,
+            correo,
+            idDireccion
+          ]);
+
+          console.log(`[personas] Persona ${numDoc} no existía — creada al guardar el resultado`);
         }
 
         // 3) Obtener placa relacionada via JOIN y enviar al microservicio externo
@@ -1563,6 +1581,39 @@ exports.guardarResultadoScraping = async (req, res) => {
 
           console.log(`[personas] Intentos incremented for ${numDoc} — error: ${err.message}`);
         }
+      } else {
+        // Sin direcciones o consulta fallida: hay que marcar la persona como
+        // consultada. Si no, queda con direccion_consultada=FALSE para siempre
+        // y vuelve a scrapearse en cada job (loop infinito).
+        const existePersona = await client.query(
+          'SELECT id_per_natural_dir FROM persona_natural_propietario WHERE numero_documento = $1',
+          [numDoc]
+        );
+
+        const mensajeError = resultado.error || 'No se encontraron direcciones';
+
+        if (existePersona.rows.length > 0) {
+          await client.query(`
+            UPDATE persona_natural_propietario SET
+              tipo_documento = COALESCE(NULLIF(tipo_documento, ''), $2),
+              direccion_consultada = TRUE,
+              direccion_encontrada = FALSE,
+              error_consulta_direccion = $3,
+              fecha_consulta_direccion = NOW(),
+              fecha_actualizacion = NOW()
+            WHERE numero_documento = $1
+          `, [numDoc, tipoDoc, mensajeError]);
+        } else {
+          await client.query(`
+            INSERT INTO persona_natural_propietario (
+              tipo_documento, numero_documento,
+              direccion_consultada, direccion_encontrada,
+              error_consulta_direccion, fecha_consulta_direccion
+            ) VALUES ($1,$2,TRUE,FALSE,$3,NOW())
+          `, [tipoDoc || 'Cédula Ciudadanía', numDoc, mensajeError]);
+        }
+
+        console.log(`[personas] ${numDoc} marcado como consultado sin dirección: ${mensajeError}`);
       }
     }
 

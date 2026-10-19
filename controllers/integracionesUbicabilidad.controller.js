@@ -16,11 +16,72 @@ function maximoPorRequest() {
   return Number.isFinite(valor) && valor > 0 ? valor : 5000;
 }
 
-function logIntegracion({ cliente, endpoint, recibidos, insertados, existentes, invalidos, duplicados, fallidos = 0, inicio }) {
+const ANIO_MIN = 2000;
+const ANIO_MAX = new Date().getFullYear() + 1;
+
+/**
+ * Normaliza el año de consulta que envía el servicio externo.
+ *  - 0    → no viene año (se guarda NULL, solo es un organizador)
+ *  - null → el valor viene pero no es válido
+ */
+function normalizarAnio(valor) {
+  if (valor === undefined || valor === null || valor === '') return 0;
+
+  const texto = String(valor).trim();
+  // "0" / "0000" significa explícitamente "sin año" (mismo criterio que el
+  // filtro ?anio=0 del panel); no es un año inválido.
+  if (texto === '0' || texto === '0000') return 0;
+  if (!/^\d{4}$/.test(texto)) return null;
+
+  const anio = Number(texto);
+  if (anio < ANIO_MIN || anio > ANIO_MAX) return null;
+
+  return anio;
+}
+
+/**
+ * Extrae el año de una metadata arbitraria. Contravenciones lo envía como
+ * `metadata.anio_consulta`; también aceptamos `metadata.anio`.
+ */
+function anioDeMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+  if (metadata.anio_consulta != null && metadata.anio_consulta !== '') return metadata.anio_consulta;
+  if (metadata.anio != null && metadata.anio !== '') return metadata.anio;
+  return undefined;
+}
+
+/**
+ * Resuelve el año recorriendo las fuentes por orden de prioridad y devolviendo
+ * la primera que normalice a un año válido (> 0).
+ *
+ *   > 0  → año válido
+ *   0    → ninguna fuente vino (la persona queda sin año)
+ *   null → hubo fuentes pero ninguna fue válida (fila INVALIDO / 400)
+ *
+ * Tolerante a la forma en que cada integrador envíe el dato: si un campo viene
+ * corrupto pero otro trae el año bien, se usa el bueno en vez de rechazar.
+ */
+function resolverAnio(fuentes) {
+  let algunaInvalida = false;
+
+  for (const fuente of fuentes) {
+    if (fuente == null || fuente === '' || fuente === 0) continue;
+    const anio = normalizarAnio(fuente);
+    if (anio === null) {
+      algunaInvalida = true;
+      continue;
+    }
+    if (anio > 0) return anio;
+  }
+
+  return algunaInvalida ? null : 0;
+}
+
+function logIntegracion({ cliente, endpoint, recibidos, insertados, reactivados = 0, existentes, invalidos, duplicados, fallidos = 0, inicio }) {
   const tiempo = Date.now() - inicio;
   console.log(
     `[integracion] cliente=${cliente} endpoint=${endpoint} recibidos=${recibidos}` +
-    ` insertados=${insertados || 0} existentes=${existentes || 0}` +
+    ` insertados=${insertados || 0} reactivados=${reactivados || 0} existentes=${existentes || 0}` +
     ` invalidos=${invalidos || 0} duplicados=${duplicados || 0} fallidos=${fallidos || 0} tiempo=${tiempo}ms`
   );
 }
@@ -67,6 +128,7 @@ const SELECT_PERSONA = `
     p.error_consulta_direccion,
     p.fecha_consulta_direccion,
     p.origen_registro,
+    p.anio_consulta,
     d.direccion,
     d.municio_departamento,
     d.telefono,
@@ -146,6 +208,7 @@ exports.registrarPersonas = async (req, res) => {
 
   let recibidos = 0;
   let insertados = 0;
+  let reactivados = 0;
   let existentes = 0;
   let invalidos = 0;
   let duplicados = 0;
@@ -157,6 +220,44 @@ exports.registrarPersonas = async (req, res) => {
 
     if (!Array.isArray(lista) || lista.length === 0) {
       return res.status(400).json({ ok: false, error: 'Debe enviar "personas" como arreglo no vacío' });
+    }
+
+    // Diagnóstico: deja rastro de qué llegó realmente del servicio externo.
+    // Con esto se distingue de un solo vistazo si el año viaja en la raíz,
+    // por persona, dentro de metadata, con otro nombre, o no viaja.
+    {
+      const muestra = lista.slice(0, 3).map((p) => ({
+        claves: p && typeof p === 'object' ? Object.keys(p) : typeof p,
+        anio: p && typeof p === 'object' ? p.anio : undefined,
+        anioCons: p && typeof p === 'object' ? p.anio_consulta : undefined,
+        anioMetadata: anioDeMetadata(p && typeof p === 'object' ? p.metadata : null),
+        numero: p && typeof p === 'object' ? p.numero_documento : undefined
+      }));
+      console.log(
+        `[integracion] body.claves=${JSON.stringify(Object.keys(body))}` +
+        ` anioRaiz=${JSON.stringify(body.anio)}` +
+        ` anioConsRaiz=${JSON.stringify(body.anio_consulta)}` +
+        ` anioMetadataRaiz=${JSON.stringify(anioDeMetadata(body.metadata))}` +
+        ` muestras=${JSON.stringify(muestra)}`
+      );
+    }
+
+    // Año por defecto para todo el lote. Cada persona puede pisarlo con su
+    // propio "anio". Es solo un organizador: RUNT no filtra por año.
+    //
+    // Precedencia: anio por persona > anio_consulta por persona > metadata
+    // por persona > anio en la raíz > anio_consulta en la raíz > metadata en
+    // la raíz. Contravenciones lo manda dentro de metadata.
+    const anioSolicitud = resolverAnio([
+      body.anio,
+      body.anio_consulta,
+      anioDeMetadata(body.metadata)
+    ]);
+    if (anioSolicitud === null) {
+      return res.status(400).json({
+        ok: false,
+        error: `anio debe ser un entero entre ${ANIO_MIN} y ${ANIO_MAX}`
+      });
     }
 
     recibidos = lista.length;
@@ -182,9 +283,32 @@ exports.registrarPersonas = async (req, res) => {
       const metadata = persona && persona.metadata && typeof persona.metadata === 'object' && !Array.isArray(persona.metadata)
         ? persona.metadata
         : null;
+      // Fuentes del año para ESTA persona, de mayor a menor prioridad.
+      // La última es el año por defecto del lote.
+      const fuentesAnio = [
+        persona && persona.anio,
+        persona && persona.anio_consulta,
+        anioDeMetadata(persona && persona.metadata),
+        anioSolicitud
+      ];
+      const anio = resolverAnio(fuentesAnio);
+      // El primer valor que vino, para devolverlo como eco aunque sea inválido.
+      const anioBruto = fuentesAnio.find((f) => f != null && f !== '' && f !== 0);
 
-      const base = { referencia_externa: ref, tipo_documento: tipoOriginal, numero_documento: numero };
+      const base = { referencia_externa: ref, tipo_documento: tipoOriginal, numero_documento: numero, anio: anioBruto ?? null };
       if (metadata !== null) base.metadata = metadata;
+
+      if (anio === null) {
+        invalidos++;
+        response.push({
+          ...base,
+          estado_recepcion: 'INVALIDO',
+          estado_consulta: null,
+          resultado_disponible: false,
+          error: `anio debe ser un entero entre ${ANIO_MIN} y ${ANIO_MAX}`
+        });
+        return;
+      }
 
       if (!tipoOriginal || !numero) {
         invalidos++;
@@ -237,7 +361,7 @@ exports.registrarPersonas = async (req, res) => {
       }
 
       vistos.add(clave);
-      const registro = { indice: response.length, ref, tipo, tipoOriginal, numero, metadata };
+      const registro = { indice: response.length, ref, tipo, tipoOriginal, numero, metadata, anio };
       validos.push(registro);
       // placeholder: se completa después de consultar la BD
       response.push({
@@ -261,6 +385,7 @@ exports.registrarPersonas = async (req, res) => {
     // 3) Insertar en lote los que no existen (respetando el UNIQUE)
     const nuevos = validos.filter(v => !buscarExistente(indice, v.tipo, v.numero));
     const insertadosSet = new Set();
+    const reactivadosSet = new Set();
     // clave `${tipoCanonico}|${numero}` -> { mensaje, codigo } de SQL
     const fallidos = new Map();
 
@@ -270,13 +395,18 @@ exports.registrarPersonas = async (req, res) => {
           INSERT INTO persona_natural_propietario (
             tipo_documento, numero_documento,
             direccion_consultada, direccion_encontrada,
-            origen_registro, fecha_actualizacion
+            origen_registro, anio_consulta, fecha_actualizacion
           )
-          SELECT u.tipo, u.numero, FALSE, FALSE, $3, NOW()
-          FROM unnest($1::text[], $2::text[]) AS u(tipo, numero)
+          SELECT u.tipo, u.numero, FALSE, FALSE, $3, NULLIF(u.anio, 0), NOW()
+          FROM unnest($1::text[], $2::text[], $4::int[]) AS u(tipo, numero, anio)
           ON CONFLICT (tipo_documento, numero_documento) DO NOTHING
           RETURNING numero_documento
-        `, [nuevos.map(n => n.tipo), nuevos.map(n => n.numero), origen]);
+        `, [
+          nuevos.map(n => n.tipo),
+          nuevos.map(n => n.numero),
+          origen,
+          nuevos.map(n => n.anio || 0)
+        ]);
         r.rows.forEach(x => insertadosSet.add(x.numero_documento));
       } catch (err) {
         // Un solo registro inválido (ej. tipo_documento > 30) revierte TODO el
@@ -288,11 +418,11 @@ exports.registrarPersonas = async (req, res) => {
               INSERT INTO persona_natural_propietario (
                 tipo_documento, numero_documento,
                 direccion_consultada, direccion_encontrada,
-                origen_registro, fecha_actualizacion
-              ) VALUES ($1, $2, FALSE, FALSE, $3, NOW())
+                origen_registro, anio_consulta, fecha_actualizacion
+              ) VALUES ($1, $2, FALSE, FALSE, $3, NULLIF($4, 0), NOW())
               ON CONFLICT (tipo_documento, numero_documento) DO NOTHING
               RETURNING numero_documento
-            `, [n.tipo, n.numero, origen]);
+            `, [n.tipo, n.numero, origen, n.anio || 0]);
             if (r.rowCount > 0) insertadosSet.add(n.numero);
           } catch (errFila) {
             fallidos.set(`${n.tipo}|${n.numero}`, {
@@ -301,6 +431,47 @@ exports.registrarPersonas = async (req, res) => {
             });
           }
         }
+      }
+    }
+
+    // 3b) Re-activar personas que ya existían con un año de consulta MENOR.
+    //     El único es (tipo_documento, numero_documento), así que la coincidencia
+    //     es por número de documento — igual que en el resto del módulo.
+    //     Se limpian las marcas de consulta para que vuelva a la cola; la
+    //     dirección anterior se conserva en fk_direcciones hasta que el nuevo
+    //     scraping la sobrescriba.
+    //
+    //     CORRECCIÓN: antes esto recorría solo `nuevos` (los que NO existían),
+    //     lo que lo dejaba sin efecto — los reactivados ya venían del INSERT con
+    //     su año puesto. Las filas que existían sin año (NULL) nunca se
+    //     actualizaban y el operador veía "Sin año" aunque el servicio enviara
+    //     el año de nuevo. Ahora se recorre TODO el lote válido.
+    const reactivables = validos.filter(v => (v.anio || 0) > 0);
+    if (reactivables.length > 0) {
+      try {
+        const r = await pool.query(`
+          UPDATE persona_natural_propietario AS p
+          SET
+            anio_consulta = u.anio,
+            origen_registro = $1,
+            direccion_consultada = FALSE,
+            direccion_encontrada = FALSE,
+            error_consulta_direccion = NULL,
+            fecha_consulta_direccion = NULL,
+            fecha_actualizacion = NOW()
+          FROM unnest($2::text[], $3::int[]) AS u(numero, anio)
+          WHERE p.numero_documento = u.numero
+            AND u.anio > 0
+            AND COALESCE(p.anio_consulta, 0) < u.anio
+          RETURNING p.numero_documento
+        `, [
+          origen,
+          reactivables.map(n => n.numero),
+          reactivables.map(n => n.anio || 0)
+        ]);
+        r.rows.forEach(x => reactivadosSet.add(x.numero_documento));
+      } catch (err) {
+        console.error('[integracion] no se pudo reactivar por año más nuevo:', err.message);
       }
     }
 
@@ -314,6 +485,17 @@ exports.registrarPersonas = async (req, res) => {
         item.estado_recepcion = 'INSERTADO';
         item.estado_consulta = 'PENDIENTE';
         item.resultado_disponible = false;
+        item.anio = valido.anio || null;
+        continue;
+      }
+
+      // Ya existía, pero llegó un año de consulta más nuevo: vuelve a la cola.
+      if (existente && reactivadosSet.has(valido.numero)) {
+        reactivados++;
+        item.estado_recepcion = 'REACTIVADO';
+        item.estado_consulta = 'PENDIENTE';
+        item.resultado_disponible = false;
+        item.anio = valido.anio || null;
         continue;
       }
 
@@ -322,6 +504,7 @@ exports.registrarPersonas = async (req, res) => {
         item.estado_recepcion = 'YA_EXISTIA';
         item.estado_consulta = estadoPublico(existente, enProceso.has(valido.numero));
         item.resultado_disponible = item.estado_consulta === 'ENCONTRADA';
+        item.anio = existente.anio_consulta ?? null;
         if (item.resultado_disponible) {
           item.persona = armarPersonaDetalle(existente);
           item.direccion = armarDireccionDetalle(existente);
@@ -355,13 +538,14 @@ exports.registrarPersonas = async (req, res) => {
     logIntegracion({
       cliente: cliente.codigo,
       endpoint: '/ubicabilidad/personas',
-      recibidos, insertados, existentes, invalidos, duplicados, fallidos: totalFallidos, inicio
+      recibidos, insertados, reactivados, existentes, invalidos, duplicados, fallidos: totalFallidos, inicio
     });
 
     const cuerpo = {
       cliente: cliente.codigo,
       total_recibidos: recibidos,
       insertados,
+      reactivados,
       existentes,
       invalidos,
       duplicados,
@@ -386,7 +570,7 @@ exports.registrarPersonas = async (req, res) => {
     logIntegracion({
       cliente: cliente.codigo,
       endpoint: '/ubicabilidad/personas',
-      recibidos, insertados, existentes, invalidos, duplicados, fallidos: totalFallidos, inicio
+      recibidos, insertados, reactivados, existentes, invalidos, duplicados, fallidos: totalFallidos, inicio
     });
     console.error('[integracion] error:', error.message);
     return res.status(500).json({ ok: false, error: 'Error procesando la solicitud' });

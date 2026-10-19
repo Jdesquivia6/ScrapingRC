@@ -10,10 +10,9 @@ async function connectToChrome() {
 
   const pages = context.pages();
 
-  let page =
-    pages.find(p =>
-      p.url().includes('runtpro.runt.gov.co')
-    ) || pages[0];
+  // Preferir una pestaña ya abierta en RUNT. Si no existe, crear una propia:
+  // nunca secuestramos pages[0], que suele ser la pestaña del operador.
+  let page = pages.find(p => p.url().includes('runtpro.runt.gov.co'));
 
   if (!page) {
     page = await context.newPage();

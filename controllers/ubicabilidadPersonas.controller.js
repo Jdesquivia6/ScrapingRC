@@ -473,38 +473,104 @@ exports.listarOrigenesApi = async (req, res) => {
  * - `grupos` devuelve los documentos listos para el textarea, opcionalmente
  *   filtrados por un origen concreto y acotados por `limit`.
  */
+/**
+ * Documentos que ya están en un trabajo (pendiente/procesando).
+ * Se restan de los pendientes para que la pantalla muestre lo que de verdad
+ * se puede cargar: cuando un trabajo termina, estos salen del conjunto solos.
+ */
+async function documentosEnCola(documentos) {
+  if (!documentos || documentos.length === 0) return new Set();
+  try {
+    const r = await pool.query(`
+      SELECT DISTINCT wji.documento
+      FROM worker_job_items wji
+      JOIN worker_jobs wj ON wj.id_job = wji.fk_job
+      WHERE wj.modulo IN ('ubicabilidad-personas', 'personas-direcciones')
+        AND wj.estado IN ('pendiente', 'procesando')
+        AND wji.estado IN ('pendiente', 'procesando')
+        AND wji.documento = ANY($1::text[])
+    `, [documentos]);
+    return new Set(r.rows.map(x => x.documento));
+  } catch (_) {
+    return new Set();
+  }
+}
+
+/**
+ * Valida el filtro de año que llega en la query.
+ * Se acepta "0" como alias de "sin año" (COALESCE(anio_consulta, 0) = 0) para
+ * que la tarjeta «Sin año» del panel pueda filtrar las solicitudes que llegaron
+ * sin año. Devuelve null (sin filtro), un entero >= 0, o undefined (inválido).
+ */
+function parseAnioFiltro(valor) {
+  const v = String(valor ?? '').trim();
+  if (!v) return null;
+  if (v === '0') return 0;
+  if (!/^\d{4}$/.test(v)) return undefined;
+  return Number(v);
+}
+
 exports.listarPendientesApi = async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 1000, 50000);
     const origenFiltro = req.query.origen ? String(req.query.origen).trim() : '';
+    const anioFiltro = req.query.anio ? String(req.query.anio).trim() : '';
 
-    // 1) Resumen por origen (siempre completo)
-    const resumenResult = await pool.query(`
-      SELECT p.origen_registro AS origen, COUNT(*)::int AS total
-      FROM persona_natural_propietario p
-      WHERE p.direccion_consultada = FALSE
-        AND p.origen_registro LIKE 'API_%'
-        AND p.numero_documento IS NOT NULL
-        AND TRIM(p.numero_documento) <> ''
-      GROUP BY p.origen_registro
-      ORDER BY COUNT(*) DESC, p.origen_registro ASC
-    `);
+    if (origenFiltro && !/^API_[A-Za-z0-9_]+$/.test(origenFiltro)) {
+      return res.status(400).json({ ok: false, error: 'Origen inválido (debe iniciar con API_)' });
+    }
 
-    // 2) Documentos para el textarea
-    const params = [];
-    let where = `
+    let anio = null;
+    if (anioFiltro) {
+      anio = parseAnioFiltro(anioFiltro);
+      if (anio === undefined) {
+        return res.status(400).json({ ok: false, error: 'anio inválido (debe ser un año de 4 dígitos o 0 para "sin año")' });
+      }
+    }
+
+    const baseWhere = `
       WHERE p.direccion_consultada = FALSE
         AND p.origen_registro LIKE 'API_%'
         AND p.numero_documento IS NOT NULL
         AND TRIM(p.numero_documento) <> ''
     `;
 
+    // 1) Resumen por año y por origen (siempre completo, sin filtros).
+    //    Se cuenta por documento DISTINTO, igual que el desglose de grupos,
+    //    para que los totales de la pantalla cuadren entre sí.
+    const resumenAnios = await pool.query(`
+      SELECT COALESCE(p.anio_consulta, 0)::int AS anio,
+             COUNT(DISTINCT p.numero_documento)::int AS total
+      FROM persona_natural_propietario p
+      ${baseWhere}
+      GROUP BY 1
+      ORDER BY 1 DESC
+    `);
+
+    const resumenOrigenes = await pool.query(`
+      SELECT p.origen_registro AS origen,
+             COUNT(DISTINCT p.numero_documento)::int AS total
+      FROM persona_natural_propietario p
+      ${baseWhere}
+        ${anio != null ? (anio === 0 ? 'AND COALESCE(p.anio_consulta, 0) = $1' : 'AND p.anio_consulta = $1') : ''}
+      GROUP BY p.origen_registro
+      ORDER BY 2 DESC, p.origen_registro ASC
+    `, anio != null ? [anio] : []);
+
+    // 2) Documentos para el textarea
+    const params = [];
+    let where = baseWhere;
+
     if (origenFiltro) {
-      if (!/^API_[A-Za-z0-9_]+$/.test(origenFiltro)) {
-        return res.status(400).json({ ok: false, error: 'Origen inválido (debe iniciar con API_)' });
-      }
       params.push(origenFiltro);
       where += ` AND p.origen_registro = $${params.length}`;
+    }
+
+    if (anio != null) {
+      params.push(anio);
+      where += anio === 0
+        ? ` AND COALESCE(p.anio_consulta, 0) = $${params.length}`
+        : ` AND p.anio_consulta = $${params.length}`;
     }
 
     params.push(limit);
@@ -512,36 +578,61 @@ exports.listarPendientesApi = async (req, res) => {
       SELECT DISTINCT ON (p.numero_documento)
         p.tipo_documento,
         p.numero_documento,
-        p.origen_registro
+        p.origen_registro,
+        COALESCE(p.anio_consulta, 0)::int AS anio
       FROM persona_natural_propietario p
       ${where}
       ORDER BY p.numero_documento, p.fecha_actualizacion DESC
       LIMIT $${params.length}
     `, params);
 
-    // 3) Agrupar por origen y tipo de documento
+    // 3) Quitar de la lista lo que ya está en un trabajo
+    const enCola = await documentosEnCola(result.rows.map(f => f.numero_documento));
+
+    // 4) Agrupar por origen, año y tipo de documento
     const gruposMap = new Map();
     for (const fila of result.rows) {
       const origen = fila.origen_registro;
+      const anioFila = fila.anio;
       const tipo = fila.tipo_documento || 'SIN_TIPO';
-      const clave = `${origen}||${tipo}`;
+      const clave = `${origen}||${anioFila}||${tipo}`;
+
       if (!gruposMap.has(clave)) {
-        gruposMap.set(clave, { origen, tipoDocumento: tipo, documentos: [], count: 0 });
+        gruposMap.set(clave, {
+          origen,
+          anio: anioFila,
+          tipoDocumento: tipo,
+          documentos: [],
+          enCola: 0,
+          porProcesar: 0
+        });
       }
+
       const grupo = gruposMap.get(clave);
-      grupo.documentos.push(fila.numero_documento);
-      grupo.count++;
+
+      if (enCola.has(fila.numero_documento)) {
+        grupo.enCola++;
+      } else {
+        grupo.documentos.push(fila.numero_documento);
+        grupo.porProcesar++;
+      }
     }
 
-    const grupos = Array.from(gruposMap.values());
-    const total = resumenResult.rows.reduce((suma, fila) => suma + fila.total, 0);
+    const grupos = Array.from(gruposMap.values())
+      .map(g => ({ ...g, total: g.enCola + g.porProcesar }))
+      .sort((a, b) => b.total - a.total);
+
+    const total = grupos.reduce((suma, g) => suma + g.total, 0);
+    const totalEnCola = grupos.reduce((suma, g) => suma + g.enCola, 0);
 
     return res.json({
       ok: true,
       total,
-      origenes: resumenResult.rows,
+      totalEnCola,
+      anios: resumenAnios.rows,
+      origenes: resumenOrigenes.rows,
       grupos,
-      documentos: result.rows.map(f => f.numero_documento)
+      documentos: grupos.flatMap(g => g.documentos)
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
@@ -550,12 +641,13 @@ exports.listarPendientesApi = async (req, res) => {
 
 /**
  * Elimina pendientes provenientes de servicios API.
- * DELETE /limpiar-api?origen=API_CONTRAVENCIONES
- * Sin ?origen borra todos los pendientes API_.
+ * DELETE /limpiar-api?origen=API_CONTRAVENCIONES&anio=2026
+ * Sin filtros borra todos los pendientes API_.
  */
 exports.limpiarDocumentosApi = async (req, res) => {
   try {
     const origenFiltro = req.query.origen ? String(req.query.origen).trim() : '';
+    const anioFiltro = req.query.anio ? String(req.query.anio).trim() : '';
     const params = [];
 
     let where = `
@@ -571,16 +663,30 @@ exports.limpiarDocumentosApi = async (req, res) => {
       where += ` AND origen_registro = $${params.length}`;
     }
 
+    if (anioFiltro) {
+      const anio = parseAnioFiltro(anioFiltro);
+      if (anio === undefined) {
+        return res.status(400).json({ ok: false, error: 'anio inválido (debe ser un año de 4 dígitos o 0 para "sin año")' });
+      }
+      params.push(anio);
+      where += anio === 0
+        ? ` AND COALESCE(anio_consulta, 0) = $${params.length}`
+        : ` AND anio_consulta = $${params.length}`;
+    }
+
     const result = await pool.query(`
       DELETE FROM persona_natural_propietario
       ${where}
     `, params);
 
+    const filtros = [origenFiltro || 'TODOS', anioFiltro || 'TODOS'].join(' / ');
+
     return res.json({
       ok: true,
       eliminados: result.rowCount,
       origen: origenFiltro || 'TODOS',
-      mensaje: `${result.rowCount} pendiente(s) de servicios API eliminado(s)`
+      anio: anioFiltro || 'TODOS',
+      mensaje: `${result.rowCount} pendiente(s) de servicios API eliminado(s) [${filtros}]`
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });

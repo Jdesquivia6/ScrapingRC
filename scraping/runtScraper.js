@@ -48,6 +48,29 @@ function normalizarDocumento(documento) {
   return String(documento || '').trim();
 }
 
+function soloDigitos(valor) {
+  return String(valor || '').replace(/\D/g, '');
+}
+
+function coincideDocumento(item, documento) {
+  if (!item) return false;
+
+  const esperado = soloDigitos(documento);
+  if (!esperado) return false;
+
+  const campos = [
+    item.numeroDocumento,
+    item.documento,
+    item.numeroDoc,
+    item.nroDocumento,
+    item.numeroIdentificacion,
+    item.numDocumento,
+    item.identificacion
+  ];
+
+  return campos.some(campo => campo != null && soloDigitos(campo) === esperado);
+}
+
 function normalizarTipoDocumento(tipoDocumento) {
   const tipo = String(tipoDocumento || '').trim().toUpperCase().replace(/\s+/g, ' ');
 
@@ -409,39 +432,47 @@ async function obtenerTextoAlerta(page) {
   return limpiarTexto(texto);
 }
 
-async function aceptarAlertaSiExiste(page) {
-  try {
-    const alerta = page.locator('.swal2-popup.swal2-show').first();
+/**
+ * Resuelve SOLO si aparece una alerta SweetAlert dentro del timeout.
+ * Si no aparece, la promesa queda pendiente a propósito: está pensada para
+ * usarse en Promise.race contra la respuesta de red, así el camino feliz no
+ * paga tiempo extra esperando una alerta que nunca llega.
+ */
+function esperarAlerta(page, timeout = 4000) {
+  return new Promise(async resolve => {
+    try {
+      const alerta = page.locator('.swal2-popup.swal2-show').first();
 
-    if (!(await alerta.isVisible({ timeout: 4000 }).catch(() => false))) {
-      return null;
+      // isVisible() NO espera en Playwright (ignora el timeout), por eso se
+      // usa waitFor: antes las alertas "sin datos" nunca se detectaban y el
+      // scrape caía en timeout de 45s reportando un error genérico.
+      await alerta.waitFor({ state: 'visible', timeout });
+
+      const texto = await obtenerTextoAlerta(page);
+
+      const btnAceptar = page.locator('button.swal2-confirm', {
+        hasText: 'Aceptar'
+      }).first();
+
+      await btnAceptar.waitFor({
+        state: 'visible',
+        timeout: 5000
+      });
+
+      await delay(page, 300, 600);
+
+      await btnAceptar.click({ force: true });
+
+      await delay(page, 700, 1200);
+
+      console.log('⚠️ Alerta aceptada:', texto);
+
+      resolve({ tipo: 'alerta', texto });
+
+    } catch (error) {
+      console.log('ℹ️ Sin alerta:', error.message);
     }
-
-    const texto = await obtenerTextoAlerta(page);
-
-    const btnAceptar = page.locator('button.swal2-confirm', {
-      hasText: 'Aceptar'
-    }).first();
-
-    await btnAceptar.waitFor({
-      state: 'visible',
-      timeout: 5000
-    });
-
-    await delay(page, 300, 600);
-
-    await btnAceptar.click({ force: true });
-
-    await delay(page, 700, 1200);
-
-    console.log('⚠️ Alerta aceptada:', texto);
-
-    return texto;
-
-  } catch (error) {
-    console.log('ℹ️ No se pudo aceptar alerta:', error.message);
-    return null;
-  }
+  });
 }
 
 async function esperarRespuestaDireccionesPN(page, numeroDocumento) {
@@ -473,9 +504,17 @@ async function esperarRespuestaDireccionesPN(page, numeroDocumento) {
 
       if (!items.length) return false;
 
-      return items.some(item =>
-        String(item.numeroDocumento || '').trim() === documento
+      // 1) Coincidencia por número de documento, tolerando grafías y campos
+      //    alternativos que pueda devolver RUNT.
+      if (items.some(item => coincideDocumento(item, documento))) return true;
+
+      // 2) Fallback: es claramente la respuesta de direcciones (trae dirección
+      //    o apellido en todas las filas) aunque el número venga con otro formato.
+      const pareceRespuestaDirecciones = items.every(item =>
+        item && (item.direccion || item.primerApellido || item.segundoApellido)
       );
+
+      return pareceRespuestaDirecciones;
 
     } catch {
       return false;
@@ -755,9 +794,13 @@ exports.scrapeDireccionesPN = async ({
 
     await medirTiempo('Espera post-búsqueda', () => delay(page, 1000, 1800));
 
-    const textoAlerta = await aceptarAlertaSiExiste(page);
+    // Carrera: gana la respuesta JSON de RUNT o la alerta "sin datos".
+    const resultado = await medirTiempo('Esperar respuesta o alerta', () =>
+      Promise.race([responsePromise, esperarAlerta(page, 4000)])
+    );
 
-    if (textoAlerta) {
+    if (resultado && resultado.tipo === 'alerta') {
+      const textoAlerta = String(resultado.texto || '');
       const alertaLower = textoAlerta.toLowerCase();
 
       const esSesion =
@@ -779,17 +822,21 @@ exports.scrapeDireccionesPN = async ({
 
       return {
         ok: false,
-        documento,
         noData: true,
+        tipoDocumento,
+        numeroDocumento: documento,
         db: dbResult,
         error: textoAlerta,
         message: 'No se encontró información para el documento y se aceptó la alerta'
       };
     }
 
-    const resultadoRespuesta = await medirTiempo('Esperar respuesta RUNT', async () => responsePromise);
-    // El .then() en esperarRespuestaDireccionesPN ya parseó el JSON
-    const rawData = resultadoRespuesta.data;
+    if (!resultado || resultado.tipo !== 'data') {
+      const motivo = (resultado && resultado.error && resultado.error.message) || 'sin respuesta de RUNT';
+      throw new Error(`Timeout esperando la respuesta de direcciones (${motivo})`);
+    }
+
+    const rawData = resultado.data;
     const items = await medirTiempo('Normalizar respuesta', () =>
       Promise.resolve(normalizarRespuestaDirecciones(rawData))
     );

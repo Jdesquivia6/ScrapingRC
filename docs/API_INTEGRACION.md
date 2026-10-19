@@ -152,12 +152,17 @@ Permiso: `puede_insertar`
 
 ```jsonc
 {
+  "anio": 2026,                            // opcional, año por defecto de TODO el lote
   "personas": [
     {
       "tipo_documento": "CC",                 // obligatorio
       "numero_documento": "1032456789",       // obligatorio, máx. 30 chars
+      "anio": 2026,                           // opcional, pisa el del lote
       "referencia_externa": "EXP-2026-00123", // opcional, eco en la respuesta
-      "metadata": { "radicado": "R-8891" }    // opcional, objeto JSON
+      "metadata": {                           // opcional, objeto JSON
+        "radicado": "R-8891",
+        "anio_consulta": 2026                 // opcional, otra forma de enviar el año
+      }
     }
   ]
 }
@@ -166,11 +171,42 @@ Permiso: `puede_insertar`
 | Campo | Tipo | Obligatorio | Notas |
 |---|---|---|---|
 | `personas` | array | ✅ | No vacío, máx. 5000 por petición |
+| `anio` (raíz) | number | ❌ | Año por defecto del lote. Entero entre 2000 y el año actual + 1 |
 | `tipo_documento` | string | ✅ | Se homologa; ver §5. Máx. 60 chars |
 | `numero_documento` | string | ✅ | Máx. 30 chars |
+| `anio` (persona) | number | ❌ | Pisa el año del lote para esa persona. Mismo rango |
+| `anio_consulta` (persona) | number | ❌ | Alias de `anio`. Misma prioridad y validación |
+| `metadata.anio_consulta` | number | ❌ | Otra forma de enviar el año. Se lee si no hay `anio` explícito |
 | `referencia_externa` | string | ❌ | **No se persiste**: solo se devuelve como eco |
-| `metadata` | object | ❌ | **No se persiste**: solo se devuelve como eco |
+| `metadata` | object | ❌ | **No se persiste** (excepto `metadata.anio_consulta`, que sí se lee) |
 
+> **Sobre `anio`.** Es el año de los comparendos que motivan la solicitud.
+> Se **sí persiste** (columna `anio_consulta`) y sirve para que el operador
+> filtre las solicitudes por año en la pantalla de Ubicabilidad Personas.
+> **No** modifica el scraping: la consulta de direcciones en RUNT es persona
+> por persona y no admite filtro por año.
+>
+> **Precedencia del año.** De mayor a menor:
+> 1. `personas[i].anio`
+> 2. `personas[i].anio_consulta`
+> 3. `personas[i].metadata.anio_consulta` (o `metadata.anio`)
+> 4. `anio` de la raíz
+> 5. `anio_consulta` de la raíz
+> 6. `metadata.anio_consulta` de la raíz
+>
+> Se recorren en ese orden y se usa **la primera fuente con un año válido**.
+> Si una viene corrupta pero otra trae el año bien, se usa la buena. Solo se
+> devuelve `400` (raíz) o `INVALIDO` (persona) cuando **todas** las que
+> vinieron son inválidas. Si ninguna viene, la persona queda con año `NULL`
+> («Sin año» en pantalla).
+>
+> CONTRAVENCIONES envía el año en `metadata.anio_consulta`, así que esa forma
+> funciona igual que `anio` explícito.
+>
+> **Re-consultas.** Si la persona ya existía con un año **menor** al que ustedes
+> envían, vuelve a la cola (`REACTIVADO`) y se consulta de nuevo. Si el año es
+> igual o menor, se responde `YA_EXISTIA` y no se repite la consulta.
+>
 > `referencia_externa` y `metadata` sirven para que ustedes correlacionen
 > la respuesta con su expediente. Si necesitan el dato después, guárdenlo
 > de su lado y reenvíenlo en el polling.
@@ -181,8 +217,9 @@ Permiso: `puede_insertar`
 {
   "ok": true,
   "cliente": "CONTRAVENCIONES",
-  "total_recibidos": 3,
+  "total_recibidos": 4,
   "insertados": 1,
+  "reactivados": 1,
   "existentes": 1,
   "invalidos": 1,
   "duplicados": 0,
@@ -192,6 +229,7 @@ Permiso: `puede_insertar`
       "referencia_externa": "EXP-2026-00123",
       "tipo_documento": "CC",                 // eco del valor enviado
       "numero_documento": "1032456789",
+      "anio": 2026,
       "metadata": { "radicado": "R-8891" },
       "estado_recepcion": "INSERTADO",
       "estado_consulta": "PENDIENTE",
@@ -199,7 +237,16 @@ Permiso: `puede_insertar`
     },
     {
       "tipo_documento": "CC",
+      "numero_documento": "7988887776",
+      "anio": 2026,
+      "estado_recepcion": "REACTIVADO",
+      "estado_consulta": "PENDIENTE",
+      "resultado_disponible": false
+    },
+    {
+      "tipo_documento": "CC",
       "numero_documento": "8001112223",
+      "anio": 2025,
       "estado_recepcion": "YA_EXISTIA",
       "estado_consulta": "ENCONTRADA",
       "resultado_disponible": true,
@@ -219,8 +266,8 @@ Permiso: `puede_insertar`
 }
 ```
 
-**Los contadores (`insertados`, `existentes`, `invalidos`, `duplicados`, `fallidos`)
-suman exactamente `total_recibidos`.**
+**Los contadores (`insertados`, `reactivados`, `existentes`, `invalidos`,
+`duplicados`, `fallidos`) suman exactamente `total_recibidos`.**
 
 > ⚠️ Si `fallidos > 0`, la API responde **`400` o `500`** con `ok: false`
 > (ver más abajo). **Nunca** responde `200` dando por hecho personas que
@@ -231,8 +278,9 @@ suman exactamente `total_recibidos`.**
 | Valor | Significado |
 |---|---|
 | `INSERTADO` | Persona nueva creada con origen `API_<SU_CODIGO>` |
-| `YA_EXISTIA` | Ya estaba en la base (cualquier origen: API, Excel, scraping) |
-| `INVALIDO` | Falta un campo obligatorio o supera la longitud máxima |
+| `REACTIVADO` | Ya existía con un año de consulta menor; volvió a la cola para re-consultarse |
+| `YA_EXISTIA` | Ya estaba en la base con el mismo año o sin año (cualquier origen: API, Excel, scraping) |
+| `INVALIDO` | Falta un campo obligatorio, supera la longitud máxima o el `anio` no es válido |
 | `DUPLICADO` | Aparece dos veces **dentro de la misma petición** |
 | `ERROR` | El `INSERT` de esa fila falló y **no** se guardó; el detalle va en `error` |
 
@@ -241,14 +289,19 @@ suman exactamente `total_recibidos`.**
 | Código | `error` | Cuándo |
 |---|---|---|
 | `400` | `Debe enviar "personas" como arreglo no vacío` | Body mal formado |
+| `400` | `anio debe ser un entero entre 2000 y YYYY` | El `anio` de la raíz no es válido |
 | `400` | `Uno o más valores exceden el largo permitido por la base de datos` | `fallidos > 0` y todos los fallos son por longitud (`22001`) |
 | `413` | `Máximo 5000 personas por solicitud (recibidas: N)` | Se superó el máximo |
 | `500` | `No se pudieron insertar todas las personas` | `fallidos > 0` por otra causa |
 | `500` | `Error procesando la solicitud` | Falla inesperada del servidor |
 
+> Un `anio` inválido **dentro de una persona** no rechaza el lote: esa fila
+> sale como `INVALIDO` con `error: "anio debe ser un entero entre 2000 y YYYY"`
+> y el resto se procesa con normalidad.
+
 > Los `400`/`500` de inserción **sí traen el cuerpo completo**
-> (`insertados`, `existentes`, `fallidos` y `personas[]` con el detalle por
-> fila), para que puedan reenviar únicamente lo que faltó.
+> (`insertados`, `reactivados`, `existentes`, `fallidos` y `personas[]` con el
+> detalle por fila), para que puedan reenviar únicamente lo que faltó.
 >
 > **Nota de robustez:** si un registro del lote no se puede guardar, la API
 > reintenta **fila por fila**, de modo que un registro malo no descarta a los
@@ -261,6 +314,7 @@ curl -X POST "http://84.247.165.214:3000/api/v1/integraciones/ubicabilidad/perso
   -H "Content-Type: application/json" \
   -H "X-API-Key: sk_live_SU_CLAVE" \
   -d '{
+    "anio": 2026,
     "personas": [
       { "tipo_documento": "CC", "numero_documento": "1032456789", "referencia_externa": "EXP-1" }
     ]
@@ -474,6 +528,7 @@ garantiza la idempotencia a nivel de base de datos.
 | Solicitudes por minuto | 120 / min / cliente | `API_RATE_LIMIT` |
 | `numero_documento` | ≤ 30 caracteres | — |
 | `tipo_documento` | ≤ 60 caracteres | — |
+| `anio` | entero entre 2000 y (año actual + 1) | — |
 | Ítems por job (interno) | 90 | — (`MAX_ITEMS_POR_JOB`) |
 
 > Los límites de longitud **coinciden con las columnas de la base**
@@ -481,9 +536,25 @@ garantiza la idempotencia a nivel de base de datos.
 > los excede, la fila aparece como `INVALIDO` (validación previa) o, en el
 > peor caso, como `ERROR` (rechazo de la base, SQLSTATE `22001`).
 >
-> Migración asociada: `scripts/ampliarTipoDocumento.sql`
-> (`tipo_documento` 30→60, `origen_registro` 50→60). El valor canónico de PPT
-> mide 31 caracteres y con la columna en 30 **revierta el lote completo**.
+> Migraciones asociadas:
+> - `scripts/ampliarTipoDocumento.sql` (`tipo_documento` 30→60,
+>   `origen_registro` 50→60). El valor canónico de PPT mide 31 caracteres y
+>   con la columna en 30 **revierta el lote completo**.
+> - `scripts/addAnioConsulta.sql` (agrega `anio_consulta smallint` y su índice).
+>   Sin esta migración, los endpoints de pendientes fallan.
+>
+> **Si los datos ya existen sin año** (se insertaron antes de la migración) y no
+> quieres reenviar el lote desde el servicio externo, puedes asignarlo a mano:
+>
+> ```bash
+> node scripts/setAnioConsulta.js 2025          # solo cuenta (dry run)
+> node scripts/setAnioConsulta.js 2025 --aplicar  # escribe
+> node scripts/setAnioConsulta.js 2025 --aplicar --reactivar  # además re-encola
+> ```
+>
+> Por defecto solo toca filas con `anio_consulta IS NULL` y **no** altera las
+> marcas de consulta, así que las direcciones ya obtenidas se conservan. Con
+> `--reactivar` sí se re-encolan para volver a scrapear.
 
 ### Rate limit
 
@@ -499,10 +570,24 @@ garantiza la idempotencia a nivel de base de datos.
 Reenviar la misma persona **nunca duplica registros**:
 
 - 1.ª vez → `estado_recepcion: "INSERTADO"`
-- 2.ª vez → `estado_recepcion: "YA_EXISTIA"`, `insertados: 0`
+- 2.ª vez (mismo año o sin año) → `estado_recepcion: "YA_EXISTIA"`, `insertados: 0`
+- 2.ª vez con un año **mayor** → `estado_recepcion: "REACTIVADO"`, `reactivados: 1`
+  (vuelve a la cola de pendientes y se vuelve a consultar)
 
 Esto también aplica si la persona ya fue cargada por Excel o por
 fotodetección: se reporta `YA_EXISTIA` y se conserva su estado actual.
+
+### Filtrado por año en la pantalla del operador
+
+El operador carga las solicitudes API y elige, en este orden:
+
+1. **Año de los comparendos** (chips con el conteo de pendientes por año)
+2. **Servicio que envió la solicitud** (`origen_registro`)
+3. **Tipo de documento**
+
+Cada grupo muestra `por procesar` y `en cola`. Lo que ya está en un job
+**no se vuelve a cargar**: los contadores bajan solos cuando el trabajo
+termina. El lote que se envía al worker es siempre de **90**.
 
 ### Concurrencia
 
