@@ -557,6 +557,31 @@ exports.listarPendientesApi = async (req, res) => {
       ORDER BY 2 DESC, p.origen_registro ASC
     `, anio != null ? [anio] : []);
 
+    // 1b) Contadores de ENRIQUECIMIENTO por año: personas ya consultadas con
+    //     dirección encontrada y cuántas ya se enviaron a CONTRAVENCIONES.
+    //     Población distinta a baseWhere (ahí solo entran los pendientes).
+    let enriquecimientoAnios = [];
+    try {
+      const enriquecimiento = await pool.query(`
+        SELECT COALESCE(p.anio_consulta, 0)::int AS anio,
+               COUNT(DISTINCT p.numero_documento)::int AS con_direccion,
+               COUNT(DISTINCT p.numero_documento)
+                 FILTER (WHERE COALESCE(p.enviado_externo, FALSE) = TRUE)::int AS enviadas
+        FROM persona_natural_propietario p
+        WHERE p.direccion_consultada = TRUE
+          AND p.direccion_encontrada = TRUE
+          AND p.origen_registro LIKE 'API_%'
+          AND p.numero_documento IS NOT NULL
+          AND TRIM(p.numero_documento) <> ''
+        GROUP BY 1
+        ORDER BY 1 DESC
+      `);
+      enriquecimientoAnios = enriquecimiento.rows;
+    } catch (enriquecimientoError) {
+      // Columnas de control de envío aún no aplicadas: el panel sigue funcionando.
+      console.warn('[enriquecimiento] Sin contadores por año:', enriquecimientoError.message);
+    }
+
     // 2) Documentos para el textarea
     const params = [];
     let where = baseWhere;
@@ -625,11 +650,39 @@ exports.listarPendientesApi = async (req, res) => {
     const total = grupos.reduce((suma, g) => suma + g.total, 0);
     const totalEnCola = grupos.reduce((suma, g) => suma + g.enCola, 0);
 
+    // Unir pendientes + enriquecimiento: un año ya procesado por completo no
+    // tendría pendientes, pero sigue necesitando su botón de "Enviar".
+    const aniosMap = new Map();
+    for (const fila of resumenAnios.rows) {
+      aniosMap.set(fila.anio, {
+        anio: fila.anio,
+        total: fila.total,
+        enCola: 0,
+        porProcesar: fila.total,
+        conDireccion: 0,
+        enviadas: 0
+      });
+    }
+    for (const fila of enriquecimientoAnios) {
+      const existente = aniosMap.get(fila.anio) || {
+        anio: fila.anio,
+        total: 0,
+        enCola: 0,
+        porProcesar: 0,
+        conDireccion: 0,
+        enviadas: 0
+      };
+      existente.conDireccion = fila.con_direccion;
+      existente.enviadas = fila.enviadas;
+      aniosMap.set(fila.anio, existente);
+    }
+    const anios = Array.from(aniosMap.values()).sort((a, b) => b.anio - a.anio);
+
     return res.json({
       ok: true,
       total,
       totalEnCola,
-      anios: resumenAnios.rows,
+      anios,
       origenes: resumenOrigenes.rows,
       grupos,
       documentos: grupos.flatMap(g => g.documentos)

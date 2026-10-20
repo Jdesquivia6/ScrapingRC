@@ -1870,7 +1870,7 @@ exports.reintentarEnviosPersonasPendientes = async (req, res) => {
       LIMIT 100
     `);
 
-    const registros = registros.rows;
+    const registros = pendientes.rows;
     let exitosos = 0;
     let fallidos = 0;
     const errores = [];

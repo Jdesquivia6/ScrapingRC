@@ -15,6 +15,8 @@ const {
   limpiarDocumentosApi
 } = require('../controllers/ubicabilidadPersonas.controller');
 
+const { enviarAnioExterno } = require('../controllers/enriquecimientoExterno.controller');
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB
@@ -51,5 +53,8 @@ router.get('/pendientes-api', listarPendientesApi);
 
 // Eliminar pendientes provenientes de servicios API
 router.delete('/limpiar-api', limpiarDocumentosApi);
+
+// Enviar los resultados del scraping de un año a CONTRAVENCIONES
+router.post('/enviar-externo', enviarAnioExterno);
 
 module.exports = router;

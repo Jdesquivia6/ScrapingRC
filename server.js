@@ -24,29 +24,54 @@ const {
 const app = express();
 
 const allowedOrigins = [
-  'http://84.247.165.214:5173',  // Frontend en producción
-  'http://localhost:5173',        // Desarrollo local
-  'http://127.0.0.1:5173',        // Desarrollo local
-  'http://localhost:3000'         // Origen local
+  // Producción mediante IP
+  'http://84.247.165.214:5173',
+
+  // Nuevo dominio AutoCore
+  'http://www.autocore.cloud:5173',
+  'http://autocore.cloud:5173',
+
+  // Futuro acceso mediante HTTPS
+  'https://www.autocore.cloud',
+  'https://autocore.cloud',
+
+  // Desarrollo local
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000'
 ];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  const allowOrigin = !origin || allowedOrigins.includes(origin)
-    ? (origin || '*')
-    : false;
 
-  if (allowOrigin) {
-    res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+  // Permitir solicitudes sin Origin y orígenes autorizados
+  if (origin && !allowedOrigins.includes(origin)) {
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(403);
+    }
+
+    return next();
   }
 
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Key');
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+
+  res.setHeader(
+    'Access-Control-Allow-Methods',
+    'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+  );
+
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Key'
+  );
+
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Private-Network', 'true');
 
   if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
+    return res.sendStatus(204);
   }
 
   next();
