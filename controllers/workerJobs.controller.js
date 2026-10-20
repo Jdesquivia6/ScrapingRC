@@ -198,11 +198,46 @@ exports.crearJob = async (req, res) => {
       });
     }
 
+    // Evita duplicados: si un documento ya está en cola para este módulo no se
+    // vuelve a encolar (se rasparía dos veces y el panel lo contaría dos veces).
+    // Los items sin documento (p. ej. consulta-placa) no se filtran.
+    const documentos = [...new Set(
+      preparedItems.map((item) => extractDocumento(item)).filter(Boolean)
+    )];
+
+    let enCola = new Set();
+    if (documentos.length > 0) {
+      const r = await client.query(`
+        SELECT DISTINCT wji.documento
+        FROM worker_job_items wji
+        JOIN worker_jobs wj ON wj.id_job = wji.fk_job
+        WHERE wj.modulo = $1
+          AND wj.estado IN ('pendiente', 'procesando')
+          AND wji.estado IN ('pendiente', 'procesando')
+          AND wji.documento = ANY($2::text[])
+      `, [moduloSanitizado, documentos]);
+      enCola = new Set(r.rows.map((x) => x.documento));
+    }
+
+    const itemsNuevos = preparedItems.filter((item) => {
+      const doc = extractDocumento(item);
+      return !doc || !enCola.has(doc);
+    });
+    const omitidos = preparedItems.length - itemsNuevos.length;
+
+    if (itemsNuevos.length === 0) {
+      return res.status(409).json({
+        ok: false,
+        error: `Los ${omitidos} documento(s) ya están en cola`,
+        yaEnCola: omitidos
+      });
+    }
+
     // Determinar tamaño de chunk según módulo (sin límite = todo en un job)
     const limitePorJob = MAX_ITEMS_POR_JOB[moduloSanitizado];
-    const chunks = limitePorJob && preparedItems.length > limitePorJob
-      ? chunkArray(preparedItems, limitePorJob)
-      : [preparedItems];
+    const chunks = limitePorJob && itemsNuevos.length > limitePorJob
+      ? chunkArray(itemsNuevos, limitePorJob)
+      : [itemsNuevos];
 
     await client.query('BEGIN');
 
@@ -254,17 +289,24 @@ exports.crearJob = async (req, res) => {
 
     await client.query('COMMIT');
 
+    const avisoOmitidos = omitidos > 0
+      ? ` · ${omitidos} ya estaban en cola y se omitieron`
+      : '';
+
     if (jobs.length === 1) {
       return res.status(201).json({
         ok: true,
-        job: jobs[0]
+        job: jobs[0],
+        omitidos,
+        message: `Se creó 1 trabajo con ${itemsNuevos.length} documento(s)${avisoOmitidos}`
       });
     }
 
     return res.status(201).json({
       ok: true,
       jobs,
-      message: `Se crearon ${jobs.length} trabajos (máx ${limitePorJob} documentos cada uno)`
+      omitidos,
+      message: `Se crearon ${jobs.length} trabajos (máx ${limitePorJob} documentos cada uno)${avisoOmitidos}`
     });
 
   } catch (error) {
