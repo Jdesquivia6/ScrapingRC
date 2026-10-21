@@ -12,6 +12,7 @@ const {
   limpiarDocumentos,
   listarPendientesApi,
   listarOrigenesApi,
+  listarErroresEnvio,
   limpiarDocumentosApi
 } = require('../controllers/ubicabilidadPersonas.controller');
 
@@ -56,5 +57,8 @@ router.delete('/limpiar-api', limpiarDocumentosApi);
 
 // Enviar los resultados del scraping de un año a CONTRAVENCIONES
 router.post('/enviar-externo', enviarAnioExterno);
+
+// Detalle de las respuestas que CONTRAVENCIONES rechazó (para reintentar)
+router.get('/errores-envio', listarErroresEnvio);
 
 module.exports = router;

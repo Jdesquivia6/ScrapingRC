@@ -566,7 +566,10 @@ exports.listarPendientesApi = async (req, res) => {
         SELECT COALESCE(p.anio_consulta, 0)::int AS anio,
                COUNT(DISTINCT p.numero_documento)::int AS con_direccion,
                COUNT(DISTINCT p.numero_documento)
-                 FILTER (WHERE COALESCE(p.enviado_externo, FALSE) = TRUE)::int AS enviadas
+                 FILTER (WHERE COALESCE(p.enviado_externo, FALSE) = TRUE)::int AS enviadas,
+               COUNT(DISTINCT p.numero_documento)
+                 FILTER (WHERE COALESCE(p.enviado_externo, FALSE) = FALSE
+                           AND COALESCE(p.intentos_envio_externo, 0) > 0)::int AS con_error
         FROM persona_natural_propietario p
         WHERE p.direccion_consultada = TRUE
           AND p.direccion_encontrada = TRUE
@@ -660,7 +663,8 @@ exports.listarPendientesApi = async (req, res) => {
         enCola: 0,
         porProcesar: fila.total,
         conDireccion: 0,
-        enviadas: 0
+        enviadas: 0,
+        conError: 0
       });
     }
     for (const fila of enriquecimientoAnios) {
@@ -670,10 +674,12 @@ exports.listarPendientesApi = async (req, res) => {
         enCola: 0,
         porProcesar: 0,
         conDireccion: 0,
-        enviadas: 0
+        enviadas: 0,
+        conError: 0
       };
       existente.conDireccion = fila.con_direccion;
       existente.enviadas = fila.enviadas;
+      existente.conError = fila.con_error || 0;
       aniosMap.set(fila.anio, existente);
     }
     const anios = Array.from(aniosMap.values()).sort((a, b) => b.anio - a.anio);
@@ -686,6 +692,88 @@ exports.listarPendientesApi = async (req, res) => {
       origenes: resumenOrigenes.rows,
       grupos,
       documentos: grupos.flatMap(g => g.documentos)
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+};
+
+/**
+ * Detalle de las respuestas que CONTRAVENCIONES rechazó.
+ * GET /errores-envio?anio=2026&origen=API_CONTRAVENCIONES
+ *
+ * Son las filas que tienen intentos de envío pero nunca quedaron marcadas
+ * como enviadas (enviado_externo = FALSE): es lo que hay que reintentar.
+ */
+exports.listarErroresEnvio = async (req, res) => {
+  try {
+    const origenFiltro = req.query.origen ? String(req.query.origen).trim() : '';
+    const anioFiltro = req.query.anio ? String(req.query.anio).trim() : '';
+
+    if (origenFiltro && !/^API_[A-Za-z0-9_]+$/.test(origenFiltro)) {
+      return res.status(400).json({ ok: false, error: 'Origen inválido (debe iniciar con API_)' });
+    }
+
+    const params = [];
+    const condiciones = [
+      "p.origen_registro LIKE 'API_%'",
+      'p.direccion_consultada = TRUE',
+      'p.direccion_encontrada = TRUE',
+      'COALESCE(p.enviado_externo, FALSE) = FALSE',
+      'COALESCE(p.intentos_envio_externo, 0) > 0'
+    ];
+
+    if (origenFiltro) {
+      params.push(origenFiltro);
+      condiciones.push(`p.origen_registro = $${params.length}`);
+    }
+
+    if (anioFiltro) {
+      const anio = parseAnioFiltro(anioFiltro);
+      if (anio === undefined) {
+        return res.status(400).json({ ok: false, error: 'anio inválido (debe ser un año de 4 dígitos o 0 para "sin año")' });
+      }
+      params.push(anio);
+      condiciones.push(anio === 0
+        ? `COALESCE(p.anio_consulta, 0) = $${params.length}`
+        : `p.anio_consulta = $${params.length}`);
+    }
+
+    const result = await pool.query(`
+      SELECT DISTINCT ON (p.numero_documento, COALESCE(p.anio_consulta, 0))
+             p.numero_documento,
+             p.tipo_documento,
+             COALESCE(p.anio_consulta, 0)::int AS anio,
+             p.origen_registro AS origen,
+             p.error_envio_externo AS motivo,
+             COALESCE(p.intentos_envio_externo, 0)::int AS intentos,
+             p.fecha_envio_externo AS ultimo_intento,
+             p.id_per_natural_dir AS id
+      FROM persona_natural_propietario p
+      WHERE ${condiciones.join('\n        AND ')}
+      ORDER BY p.numero_documento, COALESCE(p.anio_consulta, 0), p.fecha_envio_externo DESC
+      LIMIT 1000
+    `, params);
+
+    const errores = result.rows.map(f => ({
+      id: f.id,
+      numeroDocumento: f.numero_documento,
+      tipoDocumento: f.tipo_documento,
+      anio: f.anio,
+      origen: f.origen,
+      motivo: f.motivo || 'Contravenciones la contó como fallida y no dio motivo',
+      intentos: f.intentos,
+      ultimoIntento: f.ultimo_intento
+        ? new Date(f.ultimo_intento).toLocaleString('es-CO', { timeZone: 'America/Bogota' })
+        : null
+    }));
+
+    return res.json({
+      ok: true,
+      total: errores.length,
+      anio: anioFiltro || 'TODOS',
+      origen: origenFiltro || 'TODOS',
+      errores
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
