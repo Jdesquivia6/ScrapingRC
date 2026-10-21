@@ -50,7 +50,14 @@ Payload por persona:
 }
 ```
 
-Se envía en `POST <URL>/batch` como **array** de esos objetos.
+Se envía en `POST <URL>/batch` con el array dentro de la propiedad `personas`:
+
+```json
+{ "personas": [ { "tipoDocumento": "CC", "...": "..." } ] }
+```
+
+Existe también `.../batch-array` (array directo `[...]`), pero en el entorno actual no está
+publicado: devuelve `401` con cuerpo vacío sin llegar a la aplicación. Se usa `/batch`.
 
 ## Homologación de tipos de documento
 

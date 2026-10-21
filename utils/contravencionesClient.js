@@ -5,7 +5,9 @@
  * CONTRAVENCIONES_ENRIQUECER_URL y exige el header `X-API-Key`.
  *
  * Autenticación: todas las peticiones requieren `X-API-Key`.
- * Batch: POST .../batch con un ARRAY de personas en el body (máx. 5000).
+ * Batch: POST .../batch con { "personas": [...] } (máx. 5000).
+ *   Existe también .../batch-array que recibe array directo, pero aún no está
+ *   publicado en el entorno: devuelve 401 con body vacío sin llegar a la app.
  * La respuesta trae `resultados[]` con { tipoDocumento, numeroDocumento, estado, personaId }.
  */
 
@@ -128,12 +130,32 @@ function acumular(resumen, data, enviadas) {
   }
 }
 
-function errorDeRespuesta(err) {
+function errorDeRespuesta(err, url) {
+  const destino = url || BASE_URL;
   const data = err?.response?.data;
+  const conCuerpo = data && typeof data === 'object' && Object.keys(data).length > 0;
   if (data?.message) return new Error(`Contravenciones rechazó el envío: ${data.message}`);
-  if (err?.code === 'ECONNABORTED') return new Error('Contravenciones no respondió a tiempo (timeout).');
-  if (err?.response) return new Error(`Contravenciones respondió ${err.response.status}.`);
-  return new Error(`No se pudo contactar a Contravenciones: ${err?.message || 'error desconocido'}`);
+  if (err?.code === 'ECONNABORTED') {
+    return new Error(`Contravenciones no respondió a tiempo (timeout) en ${destino}.`);
+  }
+  const estado = err?.response?.status;
+  if (estado === 401 || estado === 403) {
+    return new Error(
+      conCuerpo
+        ? `Contravenciones rechazó la API key (HTTP ${estado}) en ${destino}. Revisa CONTRAVENCIONES_ENRIQUECER_API_KEY en .env.`
+        : `Contravenciones devolvió HTTP ${estado} con cuerpo vacío en ${destino}. ` +
+          'No llegó a su aplicación: esa ruta no está publicada o nos bloquea el proxy. ' +
+          'Pide confirmar la URL base vigente.'
+    );
+  }
+  if (estado === 404) {
+    return new Error(
+      `Contravenciones no tiene esa ruta (HTTP 404) en ${destino}. ` +
+      'Revisa CONTRAVENCIONES_ENRIQUECER_URL en .env: falta o sobra el sufijo.'
+    );
+  }
+  if (err?.response) return new Error(`Contravenciones respondió ${err.response.status} en ${destino}.`);
+  return new Error(`No se pudo contactar a Contravenciones (${destino}): ${err?.message || 'error desconocido'}`);
 }
 
 function verificarConfiguracion() {
@@ -141,24 +163,59 @@ function verificarConfiguracion() {
   if (!API_KEY) throw new Error('Falta configurar CONTRAVENCIONES_ENRIQUECER_API_KEY en .env');
 }
 
+/** Serializa para consola sin desbordarla: si es enorme lo recorta. */
+function aTexto(valor, max = 6000) {
+  let s;
+  try {
+    s = typeof valor === 'string' ? valor : JSON.stringify(valor);
+  } catch {
+    s = String(valor);
+  }
+  if (s === undefined) s = 'undefined';
+  return s.length > max ? `${s.slice(0, max)} ...(+${s.length - max} chars)` : s;
+}
+
+/** Log de ida: exactamente lo que le estamos enviando a CONTRAVENCIONES. */
+function logEnvio(url, body) {
+  const personas = Array.isArray(body) ? body : body?.personas;
+  const total = Array.isArray(personas) ? personas.length : 1;
+  console.log(`[enriquecimiento] → POST ${url}`);
+  console.log(`[enriquecimiento] → personas: ${total}`);
+  console.log(`[enriquecimiento] → payload: ${aTexto(body)}`);
+}
+
+/** Log de vuelta: exactamente lo que CONTRAVENCIONES nos devolvió. */
+function logRespuesta(url, estado, data) {
+  console.log(`[enriquecimiento] ← HTTP ${estado} ${url}`);
+  console.log(`[enriquecimiento] ← respuesta: ${aTexto(data)}`);
+}
+
 async function post(url, body) {
+  logEnvio(url, body);
   try {
     const { data } = await axios.post(url, body, {
       headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
       timeout: TIMEOUT_MS
     });
+    logRespuesta(url, 'OK', data);
     if (data?.success === false) {
       throw new Error(data?.message || 'Contravenciones rechazó el envío.');
     }
     return data;
   } catch (err) {
     if (err instanceof Error && err.message.startsWith('Contravenciones rechazó')) throw err;
-    throw errorDeRespuesta(err);
+    if (err?.response) {
+      logRespuesta(url, err.response.status, err.response.data);
+    } else {
+      console.log(`[enriquecimiento] ← SIN RESPUESTA ${url}: ${err?.message || 'error desconocido'}`);
+    }
+    throw errorDeRespuesta(err, url);
   }
 }
 
 /**
  * Envía personas en lote (de a 1000) a `.../enriquecer/batch`.
+ * Envuelto como { personas: [...] }, el formato que ese endpoint espera.
  * @param {Array} payloads ya armarizados con armarPayload()
  */
 async function enviarBatch(payloads) {
@@ -168,7 +225,7 @@ async function enviarBatch(payloads) {
 
   for (let i = 0; i < payloads.length; i += TAMANO_LOTE) {
     const lote = payloads.slice(i, i + TAMANO_LOTE);
-    const data = await post(`${BASE_URL}/batch`, lote);
+    const data = await post(`${BASE_URL}/batch`, { personas: lote });
     acumular(resumen, data, lote.length);
   }
   return resumen;

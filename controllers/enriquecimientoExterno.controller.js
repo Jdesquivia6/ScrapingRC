@@ -104,7 +104,11 @@ async function marcarFallidos(client, registros) {
           intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1,
           error_envio_externo = $2
       WHERE id_per_natural_dir = ANY($1::uuid[])
-    `, [lote.map(r => r.id), lote.map(r => r.error || 'Error desconocido').join(' | ')]);
+    `, [
+      lote.map(r => r.id),
+      lote.map(r => r.error || 'contravenciones la contó como fallida y no dio motivo (ver consola)')
+        .join(' | ')
+    ]);
   }
 }
 
@@ -188,20 +192,63 @@ exports.enviarAnioExterno = async (req, res) => {
 
     // Cruzar la respuesta de CONTRAVENCIONES con las filas que enviamos.
     const porDocumento = clavesResultado(respuesta);
+    const hayDetalle = porDocumento.size > 0;
+    const loteFallas = Number(respuesta?.fallidas) || 0;
+
+    if (enviables.length > 0 && !hayDetalle) {
+      console.warn(
+        `[enriquecimiento] El año ${anio} no trajo detalle por persona en la respuesta; ` +
+        'se confía en los contadores del lote.'
+      );
+    }
+
+    // Su servicio usa nombres de campo libres para el motivo; probamos varios.
+    const mensajeDe = (r) =>
+      r?.mensaje || r?.message || r?.error || r?.detalle ||
+      r?.description || r?.motivo || r?.observacion || r?.razon || null;
+
     const marcas = enviables.map(({ id, payload }) => {
-      const resultado = porDocumento.get(`${payload.tipoDocumento}|${payload.numeroDocumento}`);
+      const clave = `${payload.tipoDocumento}|${payload.numeroDocumento}`;
+      const resultado = porDocumento.get(clave);
+      const falloExplicito = !!resultado && esFallo(resultado.estado);
+      // Con detalle, solo sale bien el que aparece y no falla.
+      // Sin detalle, confiamos en los contadores: si el lote no falló, salió bien.
+      const exitoso =
+        !errorEnvio &&
+        !falloExplicito &&
+        (hayDetalle ? !!resultado : loteFallas === 0);
+
       return {
         id,
-        personaId: resultado?.personaId || null,
-        exitoso: !errorEnvio && !!resultado && !esFallo(resultado.estado),
-        error: errorEnvio || resultado?.mensaje || resultado?.message || null
+        clave,
+        numeroDocumento: payload.numeroDocumento,
+        tipoDocumento: payload.tipoDocumento,
+        personaId: resultado?.personaId ?? resultado?.id ?? null,
+        estado: resultado?.estado ?? null,
+        exitoso,
+        error: errorEnvio || mensajeDe(resultado) || null
       };
     });
 
-    await marcarExitosos(client, marcas.filter(m => m.exitoso));
-    await marcarFallidos(client, marcas.filter(m => !m.exitoso));
-
     const fallidas = marcas.filter(m => !m.exitoso);
+
+    // Log de diagnóstico: qué decía CONTRAVENCIONES por cada fila que falló.
+    if (fallidas.length > 0) {
+      console.warn(`[enriquecimiento] === ${fallidas.length} fila(s) fallaron en el año ${anio} ===`);
+      for (const m of fallidas) {
+        console.warn(
+          `[enriquecimiento] ✗ ${m.clave} | estado=${m.estado ?? '(sin estado)'} | ` +
+          `personaId=${m.personaId ?? '(ninguno)'} | motivo=${m.error ?? '(no dieron motivo)'}`
+        );
+      }
+      console.warn(`[enriquecimiento] respuesta cruda del lote: ${JSON.stringify(respuesta)}`);
+      if (respuesta?.resultados) {
+        console.warn(`[enriquecimiento] resultados[] crudo: ${JSON.stringify(respuesta.resultados)}`);
+      }
+    }
+
+    await marcarExitosos(client, marcas.filter(m => m.exitoso));
+    await marcarFallidos(client, fallidas);
 
     if (errorEnvio) {
       return res.status(502).json({
@@ -229,7 +276,17 @@ exports.enviarAnioExterno = async (req, res) => {
       totalRecibidas: respuesta?.totalRecibidas ?? 0,
       noSoportadas,
       porTipoNoSoportado,
-      errores: fallidas.slice(0, 50).map(m => m.error).filter(Boolean)
+      errores: fallidas.slice(0, 50).map(m => m.error).filter(Boolean),
+      // Lo que dijo CONTRAVENCIONES por persona, para depurar sin abrir la consola.
+      detalle: marcas.map(m => ({
+        numeroDocumento: m.numeroDocumento,
+        tipoDocumento: m.tipoDocumento,
+        estado: m.estado,
+        personaId: m.personaId,
+        exitoso: m.exitoso,
+        motivo: m.error
+      })),
+      crudo: respuesta
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message });
