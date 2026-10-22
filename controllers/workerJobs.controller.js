@@ -1475,6 +1475,12 @@ exports.guardarResultadoScraping = async (req, res) => {
         const tipoDireccion = primeraDir.tipoDireccion || primeraDir.tipo_direccion || null;
         const correo = primeraDir.correoElectronico || primeraDir.correo || null;
 
+        // RUNT devuelve una fila de dirección aunque venga vacía (estado
+        // "SIN REGISTRO" con direccion null). "Encontrada" solo aplica si hay
+        // dirección real; si no, fk_direcciones quedaría en NULL y el registro
+        // contaría como "con dirección" sin tener ninguna.
+        const tieneDireccion = Boolean(direccion);
+
         // 1) Buscar o crear dirección para evitar duplicados
         let idDireccion = null;
 
@@ -1520,7 +1526,7 @@ exports.guardarResultadoScraping = async (req, res) => {
             correo = COALESCE(NULLIF(correo, ''), $6),
             fk_direcciones = COALESCE($7, fk_direcciones),
             direccion_consultada = TRUE,
-            direccion_encontrada = TRUE,
+            direccion_encontrada = $8::boolean,
             error_consulta_direccion = NULL,
             fecha_consulta_direccion = NOW(),
             fecha_actualizacion = NOW()
@@ -1533,7 +1539,8 @@ exports.guardarResultadoScraping = async (req, res) => {
           apellidos || null,
           telefono,
           correo,
-          idDireccion
+          idDireccion,
+          tieneDireccion
         ]);
 
         if (updatePersona.rowCount === 0) {
@@ -1544,7 +1551,7 @@ exports.guardarResultadoScraping = async (req, res) => {
               celular, correo, fk_direcciones,
               direccion_consultada, direccion_encontrada,
               error_consulta_direccion, fecha_consulta_direccion
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,TRUE,NULL,NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8::boolean,NULL,NOW())
           `, [
             tipoDoc || 'Cédula Ciudadanía',
             numDoc,
@@ -1552,7 +1559,8 @@ exports.guardarResultadoScraping = async (req, res) => {
             apellidos || null,
             telefono,
             correo,
-            idDireccion
+            idDireccion,
+            tieneDireccion
           ]);
 
           console.log(`[personas] Persona ${numDoc} no existía — creada al guardar el resultado`);
@@ -1684,6 +1692,12 @@ exports.guardarResultadoScraping = async (req, res) => {
         const tipoDireccion = primeraDir.tipoDireccion || primeraDir.tipo_direccion || null;
         const correo = primeraDir.correoElectronico || primeraDir.correo || null;
 
+        // RUNT devuelve una fila de dirección aunque venga vacía (estado
+        // "SIN REGISTRO" con direccion null). "Encontrada" solo aplica si hay
+        // dirección real; si no, fk_direcciones quedaría en NULL pero el
+        // registro contaría como "con dirección" y se enviaría sin dirección.
+        const tieneDireccion = Boolean(direccion);
+
         // 1) Buscar o crear dirección
         let idDireccion = null;
         if (direccion) {
@@ -1727,13 +1741,13 @@ exports.guardarResultadoScraping = async (req, res) => {
               correo = COALESCE(NULLIF(correo, ''), $6),
               fk_direcciones = COALESCE($7, fk_direcciones),
               direccion_consultada = TRUE,
-              direccion_encontrada = TRUE,
+              direccion_encontrada = $8::boolean,
               error_consulta_direccion = NULL,
               fecha_consulta_direccion = NOW(),
               fecha_actualizacion = NOW(),
               origen_registro = CASE WHEN origen_registro LIKE 'API_%' THEN origen_registro ELSE 'CARGADO_POR_EXCEL' END
             WHERE numero_documento = $1
-          `, [numDoc, tipoDoc, nombres || null, apellidos || null, telefono, correo, idDireccion]);
+          `, [numDoc, tipoDoc, nombres || null, apellidos || null, telefono, correo, idDireccion, tieneDireccion]);
         } else {
           await client.query(`
             INSERT INTO persona_natural_propietario (
@@ -1742,7 +1756,7 @@ exports.guardarResultadoScraping = async (req, res) => {
               direccion_consultada, direccion_encontrada,
               error_consulta_direccion, fecha_consulta_direccion,
               origen_registro
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,TRUE,NULL,NOW(),'CARGADO_POR_EXCEL')
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8::boolean,NULL,NOW(),'CARGADO_POR_EXCEL')
           `, [
             tipoDoc || 'Cédula Ciudadanía',
             numDoc,
@@ -1750,7 +1764,8 @@ exports.guardarResultadoScraping = async (req, res) => {
             apellidos || null,
             telefono,
             correo,
-            idDireccion
+            idDireccion,
+            tieneDireccion
           ]);
         }
 
@@ -1767,23 +1782,29 @@ exports.guardarResultadoScraping = async (req, res) => {
           placa: null
         };
 
-        axios.post(EXTERNAL_API_PERSONAS, body, {
-          headers: { 'Content-Type': 'application/json' },
-          timeout: 15000
-        }).then(() => {
-          pool.query(`
-            UPDATE persona_natural_propietario
-            SET enviado_externo = TRUE, fecha_envio_externo = NOW(), error_envio_externo = NULL
-            WHERE numero_documento = $1
-          `, [numDoc]).catch(e => console.warn(`[ubicabilidad-personas] No se pudo marcar enviado_externo ${numDoc}: ${e.message}`));
-        }).catch(err => {
-          console.warn(`[ubicabilidad-personas] Error enviando al externo ${numDoc}: ${err.message}`);
-          pool.query(`
-            UPDATE persona_natural_propietario
-            SET intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1, error_envio_externo = $2
-            WHERE numero_documento = $1
-          `, [numDoc, err.message]).catch(e => console.warn(`[ubicabilidad-personas] No se pudo registrar intento ${numDoc}: ${e.message}`));
-        });
+        // Sin dirección real no se envía: el destino guarda la dirección y, si
+        // llega vacía, quedaría registrado como "enviado" con todo en blanco.
+        if (tieneDireccion) {
+          axios.post(EXTERNAL_API_PERSONAS, body, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 15000
+          }).then(() => {
+            pool.query(`
+              UPDATE persona_natural_propietario
+              SET enviado_externo = TRUE, fecha_envio_externo = NOW(), error_envio_externo = NULL
+              WHERE numero_documento = $1
+            `, [numDoc]).catch(e => console.warn(`[ubicabilidad-personas] No se pudo marcar enviado_externo ${numDoc}: ${e.message}`));
+          }).catch(err => {
+            console.warn(`[ubicabilidad-personas] Error enviando al externo ${numDoc}: ${err.message}`);
+            pool.query(`
+              UPDATE persona_natural_propietario
+              SET intentos_envio_externo = COALESCE(intentos_envio_externo, 0) + 1, error_envio_externo = $2
+              WHERE numero_documento = $1
+            `, [numDoc, err.message]).catch(e => console.warn(`[ubicabilidad-personas] No se pudo registrar intento ${numDoc}: ${e.message}`));
+          });
+        } else {
+          console.log(`[ubicabilidad-personas] ${numDoc} sin dirección — se omite el envío al externo`);
+        }
       } else {
         // Sin direcciones o error — crear/actualizar con error
         const existePersona = await client.query(

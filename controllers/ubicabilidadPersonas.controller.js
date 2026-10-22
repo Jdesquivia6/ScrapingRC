@@ -3,6 +3,27 @@ const { scrapeDireccionesPN } = require('../scraping/runtScraper');
 
 const ORIGEN_EXCEL = 'CARGADO_POR_EXCEL';
 
+// Orígenes que crea este módulo (carga por Excel y consulta por la API de
+// contravenciones). Se excluye a propósito SCRAPING: ese origen pertenece a
+// otros flujos y no debe verse aquí.
+const ORIGENES_MODULO = ['CARGADO_POR_EXCEL', 'API_CONTRAVENCIONES', 'API_TEST'];
+
+/**
+ * Condición SQL de origen para Historial y Resultados.
+ * - Con `?origen=X` filtra solo ese origen.
+ * - Sin `?origen` filtra los que crea este módulo.
+ * Empuja el/los parámetro(s) a `params` y devuelve la condición con su placeholder.
+ */
+function condicionOrigenModulo(req, params, columna = 'p.origen_registro') {
+  const origen = req.query.origen ? String(req.query.origen).trim() : '';
+  if (origen) {
+    params.push(origen);
+    return `${columna} = $${params.length}`;
+  }
+  params.push(ORIGENES_MODULO);
+  return `${columna} = ANY($${params.length}::text[])`;
+}
+
 /**
  * Valida un archivo Excel/CSV con columnas tipo_documento y numero_documento.
  * Devuelve resumen de la validación sin procesar aún.
@@ -223,8 +244,9 @@ exports.obtenerDocumentosParaProcesar = async (req, res) => {
 };
 
 /**
- * Lista personas con origen CARGADO_POR_EXCEL con paginación.
- * Query params: page, limit, documento, estado, fecha_inicio, fecha_fin
+ * Lista personas consultadas por este módulo con paginación.
+ * Query params: page, limit, documento, estado, fecha_inicio, fecha_fin, origen
+ * Estados: PENDIENTE, CONSULTADA, ERROR, SIN_DIRECCION
  */
 exports.listarResultados = async (req, res) => {
   try {
@@ -234,44 +256,47 @@ exports.listarResultados = async (req, res) => {
 
     const filtros = [];
     const params = [];
-    let paramCount = 0;
 
-    // Filtro fijo por origen
-    paramCount++;
-    filtros.push(`p.origen_registro = $${paramCount}`);
-    params.push(ORIGEN_EXCEL);
+    // Origen: el de ?origen= o por defecto los que crea este módulo
+    filtros.push(condicionOrigenModulo(req, params));
 
     // Filtro opcional por documento
     if (req.query.documento) {
-      paramCount++;
-      filtros.push(`p.numero_documento = $${paramCount}`);
       params.push(req.query.documento);
+      filtros.push(`p.numero_documento = $${params.length}`);
     }
 
-    // Filtro opcional por estado (no agrega parámetro: es una expresión literal)
-    if (req.query.estado) {
-      if (req.query.estado === 'ERROR') {
-        filtros.push(`p.direccion_consultada = TRUE AND p.direccion_encontrada = FALSE`);
-      } else if (req.query.estado === 'PENDIENTE') {
-        filtros.push(`p.direccion_consultada = FALSE`);
-      } else if (req.query.estado === 'CONSULTADA') {
-        filtros.push(`p.direccion_encontrada = TRUE`);
-      }
+    // Filtro opcional por estado.
+    // 'ERROR' y 'SIN_DIRECCION' se separan con error_consulta_direccion:
+    // una persona que RUNT devuelve pero sin dirección no es un error de consulta.
+    if (req.query.estado === 'ERROR') {
+      filtros.push(
+        `p.direccion_consultada = TRUE AND p.direccion_encontrada = FALSE
+         AND p.error_consulta_direccion IS NOT NULL`
+      );
+    } else if (req.query.estado === 'SIN_DIRECCION') {
+      filtros.push(
+        `p.direccion_consultada = TRUE AND p.direccion_encontrada = FALSE
+         AND p.error_consulta_direccion IS NULL`
+      );
+    } else if (req.query.estado === 'PENDIENTE') {
+      filtros.push(`p.direccion_consultada = FALSE`);
+    } else if (req.query.estado === 'CONSULTADA') {
+      filtros.push(`p.direccion_encontrada = TRUE`);
     }
 
     // Filtro opcional por rango de fechas
     if (req.query.fecha_inicio) {
-      paramCount++;
-      filtros.push(`DATE(p.fecha_consulta_direccion) >= $${paramCount}`);
       params.push(req.query.fecha_inicio);
+      filtros.push(`DATE(p.fecha_consulta_direccion) >= $${params.length}`);
     }
     if (req.query.fecha_fin) {
-      paramCount++;
-      filtros.push(`DATE(p.fecha_consulta_direccion) <= $${paramCount}`);
       params.push(req.query.fecha_fin);
+      filtros.push(`DATE(p.fecha_consulta_direccion) <= $${params.length}`);
     }
 
     const whereClause = filtros.length > 0 ? `WHERE ${filtros.join(' AND ')}` : '';
+    const paramCount = params.length;
 
     // Count total
     const countResult = await pool.query(`
@@ -293,8 +318,11 @@ exports.listarResultados = async (req, res) => {
         p.direccion_encontrada,
         p.error_consulta_direccion,
         p.fecha_consulta_direccion,
-        p.origen_registro
+        p.origen_registro,
+        d.direccion,
+        d.municio_departamento
       FROM persona_natural_propietario p
+      LEFT JOIN direcciones d ON d.id_direcciones = p.fk_direcciones
       ${whereClause}
       ORDER BY p.fecha_consulta_direccion DESC NULLS LAST
       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
@@ -371,14 +399,17 @@ exports.listarPendientes = async (req, res) => {
 };
 
 /**
- * Lista historial de personas consultadas con origen CARGADO_POR_EXCEL.
+ * Lista historial de personas consultadas por este módulo.
+ * Origen: el de `?origen=`, o por defecto los que crea este módulo.
  * Incluye dirección completa para exportación a Excel.
  */
 exports.listarHistorial = async (req, res) => {
   try {
     const limit = req.query.limit ? Math.min(Number(req.query.limit), 100000) : null;
+    const params = [];
+    const condicionOrigen = condicionOrigenModulo(req, params);
 
-    const result = await pool.query(`
+    let sql = `
       SELECT DISTINCT ON (p.numero_documento)
         p.tipo_documento,
         p.numero_documento,
@@ -398,10 +429,16 @@ exports.listarHistorial = async (req, res) => {
       FROM persona_natural_propietario p
       LEFT JOIN direcciones d ON d.id_direcciones = p.fk_direcciones
       WHERE p.direccion_consultada = TRUE
-        AND p.origen_registro = $1
+        AND ${condicionOrigen}
       ORDER BY p.numero_documento, COALESCE(p.fecha_consulta_direccion, p.fecha_actualizacion) DESC
-      ${limit !== null ? 'LIMIT $2' : ''}
-    `, limit !== null ? [ORIGEN_EXCEL, limit] : [ORIGEN_EXCEL]);
+    `;
+
+    if (limit !== null) {
+      params.push(limit);
+      sql += ` LIMIT $${params.length}`;
+    }
+
+    const result = await pool.query(sql, params);
 
     return res.json({
       ok: true,
