@@ -7,6 +7,7 @@ const fs = require('fs');
 const { scrapeVehiculo, scrapeVehiculoBatch } = require('../scraping/vehiculoScraper');
 const { scrapeDatosVehiculo } = require('../scraping/datosVehiculoScraper');
 const { scrapeDireccionesPN } = require('../scraping/runtScraper');
+const { disconnectChrome } = require('../scraping/connectToChrome');
 const { scrapeLiquidacionTramite } = require('../scraping/liquidacionScraper');
 
 const API_BASE = process.env.WORKER_API_BASE || 'http://localhost:3000/api';
@@ -622,7 +623,7 @@ async function procesarJob(job, items) {
       try { await setItemEstado(job.id_job, item.id_item, 'fallido', null, message); } catch (_) {}
     }
 
-    await sleep(250);
+    await sleep(100);
   }
 
   // El backend auto-finaliza el job al reportar el último item.
@@ -640,6 +641,10 @@ async function procesarJob(job, items) {
   }
 }
 
+// Devuelve true si la iteracion llegó a procesar (o reinsertar) un job.
+// main() lo usa para no esperar el intervalo cuando queda cola por atender.
+let avisadoSinJobs = false;
+
 async function ciclo() {
   try {
     const hb = await heartbeat();
@@ -647,16 +652,20 @@ async function ciclo() {
     if (!hb.elegible) {
       const msg = `[${new Date().toISOString()}] Worker no elegible | sesion=${hb.reglas?.sesionActiva} huella=${hb.reglas?.huellaViva}`;
       console.log(msg);
-      return;
+      return false;
     }
 
     const take = await tomarSiguiente();
 
     if (!take.job) {
-      console.log(`[${new Date().toISOString()}] Sin jobs pendientes`);
-      return;
+      if (!avisadoSinJobs) {
+        console.log(`[${new Date().toISOString()}] Sin jobs pendientes`);
+        avisadoSinJobs = true;
+      }
+      return false;
     }
 
+    avisadoSinJobs = false;
     console.log(`[${new Date().toISOString()}] Procesando job ${take.job.id_job} (${take.job.modulo}) items=${take.items.length}`);
     const jobEstado = take.job.estado;
     if (jobEstado === 'procesando' || jobEstado === 'pendiente') {
@@ -666,17 +675,31 @@ async function ciclo() {
       await api.post(`/worker-jobs/${take.job.id_job}/worker/estado`, { estado: 'pendiente' });
     }
     console.log(`[${new Date().toISOString()}] Job ${take.job.id_job} finalizado`);
+    return true;
   } catch (error) {
     const status = error?.response?.status;
     const msg = error?.response?.data?.error || error.message;
     console.error(`[${new Date().toISOString()}] Error en ciclo worker: status=${status} msg=${msg}`);
+    return false;
+  } finally {
+    // Liberar la conexión CDP al terminar: se reabre sola en el próximo item y
+    // evita acumular conexiones del navegador entre jobs.
+    await disconnectChrome().catch(() => {});
   }
 }
 
 async function main() {
   console.log(`Worker ${WORKER_NAME} iniciado | modulos=${MODULES.join(',')} | intervalo=${INTERVAL_MS}ms`);
-  await ciclo();
-  setInterval(ciclo, INTERVAL_MS);
+
+  // Bucle serial en lugar de setInterval(ciclo, INTERVAL_MS). Con setInterval,
+  // mientras un job corria (p. ej. 1391s) el timer seguia disparándose cada 4s:
+  // ~348 ticks que hacian heartbeat + estado de sesión + tomar siguiente
+  // (~1000 llamadas HTTP inútiles) e imprimian "Sin jobs pendientes" a cada rato.
+  // Ahora cada iteración espera el intervalo solo si no encontró trabajo.
+  for (;;) {
+    const proceso = await ciclo();
+    if (!proceso) await sleep(INTERVAL_MS);
+  }
 }
 
 main().catch((error) => {
