@@ -560,7 +560,10 @@ async function prepararFormulario(page, tipoDocumento) {
     throw new Error('Sesión RUNT vencida');
   }
 
-  await delay(page, 1000, 1800);
+  // openTipoDocumentoSelect hace waitFor(visible, 15000) sobre el mat-form-field,
+  // asi que el formulario ya se espera solo. Se baja de 1000-1800 a 300-600 para
+  // conservar un pequeño aterrizaje humano sin pagar 1.4s por documento.
+  await delay(page, 300, 600);
 
   await selectTipoDocumento(page, tipoDocumento);
 }
@@ -792,7 +795,9 @@ exports.scrapeDireccionesPN = async ({
       return respuestaSesionVencida(documento);
     }
 
-    await medirTiempo('Espera post-búsqueda', () => delay(page, 1000, 1800));
+    // Sin espera fija antes de la carrera: responsePromise (waitForResponse, 45s)
+    // y esperarAlerta(4s) ya se encargan de esperar de verdad. Dormir aqui solo
+    // sumaba ~1.4s por documento antes de empezar a esperar.
 
     // Carrera: gana la respuesta JSON de RUNT o la alerta "sin datos".
     const resultado = await medirTiempo('Esperar respuesta o alerta', () =>
